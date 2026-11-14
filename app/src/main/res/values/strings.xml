@@ -1,0 +1,47 @@
+<resources>
+    <string name="app_name">BlockBench</string>
+    <string name="tagline">Hyper-local tools &amp; micro-services on your block</string>
+
+    <!-- Auth -->
+    <string name="auth_headline">Your street\'s shared workbench.</string>
+    <string name="auth_subhead">Borrow tools two doors down, claim 20-minute micro-jobs, and settle deposits in transparent micro-escrow.</string>
+    <string name="sign_in_google">Sign in with Google</string>
+    <string name="sign_out">Sign out</string>
+
+    <!-- Navigation -->
+    <string name="nav_feed">Block Feed</string>
+    <string name="nav_escrow">Escrow</string>
+    <string name="nav_trust">Trust &amp; Pro</string>
+
+    <!-- Onboarding / Circles -->
+    <string name="join_or_create_title">Join your neighborhood block</string>
+    <string name="create_block_tab">Start a Block</string>
+    <string name="join_block_tab">Join with Code</string>
+    <string name="block_name_hint">e.g. Oak &amp; 14th Block</string>
+    <string name="invite_code_hint">Enter 6-character code (e.g. OAK482)</string>
+    <string name="use_location_area">Detect my neighborhood area</string>
+    <string name="create_block_cta">Create Block Circle</string>
+    <string name="join_block_cta">Unlock Block Feed</string>
+
+    <!-- Feed & Listings -->
+    <string name="post_listing_fab">Post Tool or Job</string>
+    <string name="search_listings_hint">Search pressure washer, ladder, latch fix...</string>
+    <string name="filter_all">All Nearby</string>
+    <string name="filter_tools">Tools</string>
+    <string name="filter_jobs">Micro-Jobs</string>
+    <string name="filter_instant">Instant Pickup</string>
+
+    <!-- Escrow & Monetization -->
+    <string name="escrow_fee_note">5% transparent micro-escrow fee protects deposits and guarantees instant payout release.</string>
+    <string name="pro_alerts_title">BlockBench Pro Alerts</string>
+    <string name="pro_alerts_price">$4.99/mo · Priority Feed &amp; Auto-Match</string>
+    <string name="share_invite_cta">Invite Neighbor (1-Tap)</string>
+    <string name="share_trust_card_cta">Share Trust Card</string>
+
+    <!-- Review Enhancements -->
+    <string name="copy_invite_code">Copy Code</string>
+    <string name="edit_listing">Edit Details</string>
+    <string name="switch_block_title">Your Neighborhood Blocks</string>
+    <string name="leave_block_cta">Leave Block</string>
+    <string name="retry_sync">Retry Connection</string>
+</resources>

@@ -1,0 +1,374 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: default-deny everything unless explicitly matched below
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Reusable Hardened Primitives ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    function isValidBoundedStringArray(arr, maxLen) {
+      return arr is list && arr.size() <= maxLen && (arr.size() == 0 || arr[0] is string);
+    }
+
+    // --- Validation Blueprints ---
+    function isValidUserProfile(data) {
+      return data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
+             data.neighborhoodLabel is string && data.neighborhoodLabel.size() <= 80 &&
+             data.activeCircleId is string && data.activeCircleId.size() <= 128 &&
+             data.activeCircleName is string && data.activeCircleName.size() <= 80 &&
+             data.activeInviteCode is string && data.activeInviteCode.size() <= 16 &&
+             data.trustScore is number && data.trustScore >= 0.0 && data.trustScore <= 5.0 &&
+             data.completedHandoffs is int && data.completedHandoffs >= 0 && data.completedHandoffs <= 100000 &&
+             data.onTimeReturns is int && data.onTimeReturns >= 0 && data.onTimeReturns <= 100000 &&
+             data.totalEarnedCents is int && data.totalEarnedCents >= 0 && data.totalEarnedCents <= 1000000000 &&
+             data.totalFeesSavedOrPaidCents is int && data.totalFeesSavedOrPaidCents >= 0 && data.totalFeesSavedOrPaidCents <= 1000000000 &&
+             data.proAlertsEnabled is bool &&
+             data.alertRadiusMiles is number && data.alertRadiusMiles >= 0.25 && data.alertRadiusMiles <= 10.0 &&
+             isValidBoundedStringArray(data.alertCategories, 8);
+    }
+
+    function isValidCircle(data) {
+      return data.creatorUid is string && data.creatorUid.size() >= 1 && data.creatorUid.size() <= 128 &&
+             data.name is string && data.name.size() >= 2 && data.name.size() <= 60 &&
+             data.inviteCode is string && data.inviteCode.size() >= 4 && data.inviteCode.size() <= 12 &&
+             data.inviteCode.matches('^[A-Z0-9]+$') &&
+             data.radiusMiles is number && data.radiusMiles >= 0.25 && data.radiusMiles <= 10.0 &&
+             data.memberUids is list && data.memberUids.size() >= 1 && data.memberUids.size() <= 50 &&
+             data.memberUids[0] is string;
+    }
+
+    function isValidCircleInvite(data) {
+      return data.inviteCode is string && data.inviteCode.size() >= 4 && data.inviteCode.size() <= 12 &&
+             data.inviteCode.matches('^[A-Z0-9]+$') &&
+             data.circleId is string && isValidId(data.circleId) &&
+             data.circleName is string && data.circleName.size() >= 2 && data.circleName.size() <= 60 &&
+             data.creatorUid is string && data.creatorUid.size() >= 1 && data.creatorUid.size() <= 128;
+    }
+
+    function isValidListing(data) {
+      return data.circleId is string && isValidId(data.circleId) &&
+             data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 60 &&
+             data.ownerTrustScore is number && data.ownerTrustScore >= 0.0 && data.ownerTrustScore <= 5.0 &&
+             data.memberUids is list && data.memberUids.size() >= 1 && data.memberUids.size() <= 50 &&
+             data.memberUids[0] is string &&
+             data.kind in ['tool', 'micro_job'] &&
+             data.title is string && data.title.size() >= 3 && data.title.size() <= 80 &&
+             data.description is string && data.description.size() <= 400 &&
+             data.category is string && data.category.size() >= 2 && data.category.size() <= 40 &&
+             data.rateCents is int && data.rateCents >= 100 && data.rateCents <= 500000 &&
+             data.depositCents is int && data.depositCents >= 0 && data.depositCents <= 500000 &&
+             data.distanceMiles is number && data.distanceMiles >= 0.05 && data.distanceMiles <= 10.0 &&
+             data.instantPickup is bool &&
+             data.photoUri is string && data.photoUri.size() <= 500 &&
+             data.status in ['available', 'reserved', 'paused'];
+    }
+
+    function isValidBooking(data) {
+      return data.listingId is string && isValidId(data.listingId) &&
+             data.listingTitle is string && data.listingTitle.size() >= 1 && data.listingTitle.size() <= 80 &&
+             data.listingKind in ['tool', 'micro_job'] &&
+             data.circleId is string && isValidId(data.circleId) &&
+             data.requesterUid is string && data.requesterUid.size() >= 1 && data.requesterUid.size() <= 128 &&
+             data.requesterName is string && data.requesterName.size() >= 1 && data.requesterName.size() <= 60 &&
+             data.providerUid is string && data.providerUid.size() >= 1 && data.providerUid.size() <= 128 &&
+             data.providerName is string && data.providerName.size() >= 1 && data.providerName.size() <= 60 &&
+             data.requesterUid != data.providerUid &&
+             data.participantUids is list && data.participantUids.size() == 2 &&
+             data.requesterUid in data.participantUids &&
+             data.providerUid in data.participantUids &&
+             data.grossAmountCents is int && data.grossAmountCents >= 100 && data.grossAmountCents <= 500000 &&
+             data.depositCents is int && data.depositCents >= 0 && data.depositCents <= 500000 &&
+             data.platformFeeCents is int && data.platformFeeCents >= 0 && data.platformFeeCents <= 100000 &&
+             data.providerNetCents is int && data.providerNetCents >= 0 && data.providerNetCents <= 500000 &&
+             data.status in ['requested', 'escrow_held', 'in_progress', 'completed', 'cancelled'] &&
+             data.notes is string && data.notes.size() <= 250;
+    }
+
+    // --- Collection 1: /users/{userId} (Strictly Owner-Isolated) ---
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if isSignedIn() && request.auth.uid == userId;
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().uid == request.auth.uid &&
+                       incoming().keys().hasAll([
+                         'uid', 'displayName', 'neighborhoodLabel', 'activeCircleId',
+                         'activeCircleName', 'activeInviteCode', 'trustScore',
+                         'completedHandoffs', 'onTimeReturns', 'totalEarnedCents',
+                         'totalFeesSavedOrPaidCents', 'proAlertsEnabled',
+                         'alertRadiusMiles', 'alertCategories', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'uid', 'displayName', 'neighborhoodLabel', 'activeCircleId',
+                         'activeCircleName', 'activeInviteCode', 'trustScore',
+                         'completedHandoffs', 'onTimeReturns', 'totalEarnedCents',
+                         'totalFeesSavedOrPaidCents', 'proAlertsEnabled',
+                         'alertRadiusMiles', 'alertCategories', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidUserProfile(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().uid == existing().uid &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'displayName', 'neighborhoodLabel', 'activeCircleId',
+                         'activeCircleName', 'activeInviteCode', 'trustScore',
+                         'completedHandoffs', 'onTimeReturns', 'totalEarnedCents',
+                         'totalFeesSavedOrPaidCents', 'proAlertsEnabled',
+                         'alertRadiusMiles', 'alertCategories', 'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+    }
+
+    // --- Collection 2: /circles/{circleId} (Block Members Only) ---
+    match /circles/{circleId} {
+      allow get: if isSignedIn() && isValidId(circleId) && request.auth.uid in existing().memberUids;
+      allow list: if isSignedIn() && request.auth.uid in existing().memberUids;
+
+      allow create: if isSignedIn() &&
+                       isValidId(circleId) &&
+                       incoming().creatorUid == request.auth.uid &&
+                       incoming().memberUids.size() == 1 &&
+                       request.auth.uid in incoming().memberUids &&
+                       incoming().keys().hasAll([
+                         'creatorUid', 'name', 'inviteCode', 'radiusMiles',
+                         'memberUids', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'creatorUid', 'name', 'inviteCode', 'radiusMiles',
+                         'memberUids', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidCircle(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(circleId) &&
+                       isValidCircle(incoming()) &&
+                       incoming().creatorUid == existing().creatorUid &&
+                       incoming().inviteCode == existing().inviteCode &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       (
+                         // Action 1: Creator updates circle metadata
+                         (
+                           request.auth.uid == existing().creatorUid &&
+                           incoming().memberUids == existing().memberUids &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'radiusMiles', 'updatedAt'])
+                         ) ||
+                         // Action 2: New neighbor joins circle (additive membership only)
+                         (
+                           !(request.auth.uid in existing().memberUids) &&
+                           request.auth.uid in incoming().memberUids &&
+                           incoming().memberUids.hasAll(existing().memberUids) &&
+                           incoming().memberUids.size() == existing().memberUids.size() + 1 &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt'])
+                         ) ||
+                         // Action 3: Non-creator member leaves circle
+                         (
+                           request.auth.uid in existing().memberUids &&
+                           request.auth.uid != existing().creatorUid &&
+                           !(request.auth.uid in incoming().memberUids) &&
+                           existing().memberUids.hasAll(incoming().memberUids) &&
+                           incoming().memberUids.size() == existing().memberUids.size() - 1 &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt'])
+                         )
+                       );
+
+      allow delete: if isSignedIn() && isValidId(circleId) && existing().creatorUid == request.auth.uid;
+    }
+
+    // --- Collection 3: /circleInvites/{inviteCode} (Exact-Code Get Only, Never Listable) ---
+    match /circleInvites/{inviteCode} {
+      allow get: if isSignedIn() && isValidId(inviteCode);
+      allow list: if false;
+
+      allow create: if isSignedIn() &&
+                       isValidId(inviteCode) &&
+                       incoming().inviteCode == inviteCode &&
+                       incoming().creatorUid == request.auth.uid &&
+                       incoming().keys().hasAll([
+                         'inviteCode', 'circleId', 'circleName', 'creatorUid', 'createdAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'inviteCode', 'circleId', 'circleName', 'creatorUid', 'createdAt'
+                       ]) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidCircleInvite(incoming()) &&
+                       exists(/databases/$(database)/documents/circles/$(incoming().circleId)) &&
+                       get(/databases/$(database)/documents/circles/$(incoming().circleId)).data.creatorUid == request.auth.uid;
+
+      allow update: if false;
+      allow delete: if isSignedIn() && isValidId(inviteCode) && existing().creatorUid == request.auth.uid;
+    }
+
+    // --- Collection 4: /listings/{listingId} (Block-Member Scoped) ---
+    match /listings/{listingId} {
+      allow get: if isSignedIn() && isValidId(listingId) && request.auth.uid in existing().memberUids;
+      allow list: if isSignedIn() && request.auth.uid in existing().memberUids;
+
+      allow create: if isSignedIn() &&
+                       isValidId(listingId) &&
+                       incoming().ownerUid == request.auth.uid &&
+                       request.auth.uid in incoming().memberUids &&
+                       incoming().keys().hasAll([
+                         'circleId', 'ownerUid', 'ownerName', 'ownerTrustScore',
+                         'memberUids', 'kind', 'title', 'description', 'category',
+                         'rateCents', 'depositCents', 'distanceMiles', 'instantPickup',
+                         'photoUri', 'status', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'circleId', 'ownerUid', 'ownerName', 'ownerTrustScore',
+                         'memberUids', 'kind', 'title', 'description', 'category',
+                         'rateCents', 'depositCents', 'distanceMiles', 'instantPickup',
+                         'photoUri', 'status', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidListing(incoming()) &&
+                       exists(/databases/$(database)/documents/circles/$(incoming().circleId)) &&
+                       request.auth.uid in get(/databases/$(database)/documents/circles/$(incoming().circleId)).data.memberUids;
+
+      allow update: if isSignedIn() &&
+                       isValidId(listingId) &&
+                       isValidListing(incoming()) &&
+                       incoming().circleId == existing().circleId &&
+                       incoming().ownerUid == existing().ownerUid &&
+                       incoming().kind == existing().kind &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       (
+                         // Action 1: Owner edits listing details, availability, or syncs circle members
+                         (
+                           request.auth.uid == existing().ownerUid &&
+                           request.auth.uid in incoming().memberUids &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'title', 'description', 'category', 'rateCents',
+                             'depositCents', 'distanceMiles', 'instantPickup',
+                             'photoUri', 'status', 'memberUids', 'updatedAt'
+                           ])
+                         ) ||
+                         // Action 2: Circle member joins & syncs membership onto block listings
+                         (
+                           !(request.auth.uid in existing().memberUids) &&
+                           request.auth.uid in incoming().memberUids &&
+                           incoming().memberUids.hasAll(existing().memberUids) &&
+                           incoming().memberUids.size() == existing().memberUids.size() + 1 &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt']) &&
+                           exists(/databases/$(database)/documents/circles/$(existing().circleId)) &&
+                           request.auth.uid in get(/databases/$(database)/documents/circles/$(existing().circleId)).data.memberUids
+                         ) ||
+                         // Action 3: Verified block member updates availability status during booking
+                         (
+                           request.auth.uid in existing().memberUids &&
+                           incoming().memberUids == existing().memberUids &&
+                           incoming().status in ['available', 'reserved'] &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+                         )
+                       );
+
+      allow delete: if isSignedIn() && isValidId(listingId) && existing().ownerUid == request.auth.uid;
+    }
+
+    // --- Collection 5: /bookings/{bookingId} (Participant-Isolated Escrow Ledger) ---
+    match /bookings/{bookingId} {
+      allow get: if isSignedIn() && isValidId(bookingId) && request.auth.uid in existing().participantUids;
+      allow list: if isSignedIn() && request.auth.uid in existing().participantUids;
+
+      allow create: if isSignedIn() &&
+                       isValidId(bookingId) &&
+                       (request.auth.uid == incoming().requesterUid || request.auth.uid == incoming().providerUid) &&
+                       incoming().status == 'requested' &&
+                       incoming().keys().hasAll([
+                         'listingId', 'listingTitle', 'listingKind', 'circleId',
+                         'requesterUid', 'requesterName', 'providerUid', 'providerName',
+                         'participantUids', 'grossAmountCents', 'depositCents',
+                         'platformFeeCents', 'providerNetCents', 'status', 'notes',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'listingId', 'listingTitle', 'listingKind', 'circleId',
+                         'requesterUid', 'requesterName', 'providerUid', 'providerName',
+                         'participantUids', 'grossAmountCents', 'depositCents',
+                         'platformFeeCents', 'providerNetCents', 'status', 'notes',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidBooking(incoming()) &&
+                       exists(/databases/$(database)/documents/listings/$(incoming().listingId)) &&
+                       request.auth.uid in get(/databases/$(database)/documents/listings/$(incoming().listingId)).data.memberUids;
+
+      allow update: if isSignedIn() &&
+                       isValidId(bookingId) &&
+                       request.auth.uid in existing().participantUids &&
+                       isValidBooking(incoming()) &&
+                       // Terminal State Locking: completed/cancelled bookings are immutable
+                       !(existing().status in ['completed', 'cancelled']) &&
+                       // Immutable identity & financial terms
+                       incoming().listingId == existing().listingId &&
+                       incoming().listingTitle == existing().listingTitle &&
+                       incoming().listingKind == existing().listingKind &&
+                       incoming().circleId == existing().circleId &&
+                       incoming().requesterUid == existing().requesterUid &&
+                       incoming().requesterName == existing().requesterName &&
+                       incoming().providerUid == existing().providerUid &&
+                       incoming().providerName == existing().providerName &&
+                       incoming().participantUids == existing().participantUids &&
+                       incoming().grossAmountCents == existing().grossAmountCents &&
+                       incoming().depositCents == existing().depositCents &&
+                       incoming().platformFeeCents == existing().platformFeeCents &&
+                       incoming().providerNetCents == existing().providerNetCents &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['status', 'notes', 'updatedAt']) &&
+                       (
+                         // Action 1: Approve & Hold Escrow
+                         (existing().status == 'requested' && incoming().status == 'escrow_held') ||
+                         // Action 2: Confirm Handoff Started
+                         (existing().status == 'escrow_held' && incoming().status == 'in_progress') ||
+                         // Action 3: Confirm Return & Release Payout
+                         (existing().status == 'in_progress' && incoming().status == 'completed') ||
+                         // Action 4: Cancel before handoff
+                         (existing().status in ['requested', 'escrow_held'] && incoming().status == 'cancelled')
+                       );
+
+      // Escrow ledger records are auditable and cannot be deleted
+      allow delete: if false;
+    }
+  }
+}

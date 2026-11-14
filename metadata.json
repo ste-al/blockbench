@@ -1,0 +1,6 @@
+{
+  "name": "BlockBench",
+  "description": "Hyper-local neighborhood tool sharing and micro-services ledger with micro-escrow and trust cards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

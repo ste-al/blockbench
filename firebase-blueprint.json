@@ -1,0 +1,181 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated neighbor profile, block membership pointer, Pro Alerts settings, and passive earnings ledger.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID of the user." },
+        "displayName": { "type": "string", "description": "Display name shown to neighbors." },
+        "neighborhoodLabel": { "type": "string", "description": "Human-friendly street or block label." },
+        "activeCircleId": { "type": "string", "description": "Currently selected BlockCircle document ID." },
+        "activeCircleName": { "type": "string", "description": "Display name of the active BlockCircle." },
+        "activeInviteCode": { "type": "string", "description": "Invite code of the active BlockCircle." },
+        "trustScore": { "type": "number", "description": "Neighbor reliability rating from 0.0 to 5.0." },
+        "completedHandoffs": { "type": "integer", "description": "Total completed tool rentals and micro-jobs." },
+        "onTimeReturns": { "type": "integer", "description": "Count of on-time tool returns and jobs." },
+        "totalEarnedCents": { "type": "integer", "description": "Cumulative net earnings in cents." },
+        "totalFeesSavedOrPaidCents": { "type": "integer", "description": "Cumulative 5% micro-escrow fees processed in cents." },
+        "proAlertsEnabled": { "type": "boolean", "description": "Whether BlockBench Pro Alerts tier is active." },
+        "alertRadiusMiles": { "type": "number", "description": "Pro Alert watch radius in miles." },
+        "alertCategories": { "type": "array", "description": "Watched listing categories for Pro Alerts." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update (FieldValue.serverTimestamp())." }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "neighborhoodLabel",
+        "activeCircleId",
+        "activeCircleName",
+        "activeInviteCode",
+        "trustScore",
+        "completedHandoffs",
+        "onTimeReturns",
+        "totalEarnedCents",
+        "totalFeesSavedOrPaidCents",
+        "proAlertsEnabled",
+        "alertRadiusMiles",
+        "alertCategories",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "BlockCircle": {
+      "title": "BlockCircle",
+      "description": "Verified hyper-local residential block circle uniting neighbors within a few streets.",
+      "type": "object",
+      "properties": {
+        "creatorUid": { "type": "string", "description": "UID of the neighbor who created the circle." },
+        "name": { "type": "string", "description": "Neighborhood block name." },
+        "inviteCode": { "type": "string", "description": "6-character uppercase invite code." },
+        "radiusMiles": { "type": "number", "description": "Circle coverage radius in miles." },
+        "memberUids": { "type": "array", "description": "Bounded list of member UIDs (max 50)." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update." }
+      },
+      "required": ["creatorUid", "name", "inviteCode", "radiusMiles", "memberUids", "createdAt", "updatedAt"]
+    },
+    "CircleInvite": {
+      "title": "CircleInvite",
+      "description": "Single-document lookup record keyed by uppercase invite code.",
+      "type": "object",
+      "properties": {
+        "inviteCode": { "type": "string", "description": "Uppercase invite code matching the document ID." },
+        "circleId": { "type": "string", "description": "Target BlockCircle document ID." },
+        "circleName": { "type": "string", "description": "Display name of the target circle." },
+        "creatorUid": { "type": "string", "description": "UID of the circle creator." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation." }
+      },
+      "required": ["inviteCode", "circleId", "circleName", "creatorUid", "createdAt"]
+    },
+    "Listing": {
+      "title": "Listing",
+      "description": "Peer-to-peer tool rental or hyper-local micro-job posted inside a BlockCircle.",
+      "type": "object",
+      "properties": {
+        "circleId": { "type": "string", "description": "Parent BlockCircle document ID." },
+        "ownerUid": { "type": "string", "description": "UID of the neighbor who posted the listing." },
+        "ownerName": { "type": "string", "description": "Display name of the listing owner." },
+        "ownerTrustScore": { "type": "number", "description": "Owner trust rating snapshot." },
+        "memberUids": { "type": "array", "description": "Denormalized circle member UIDs for secure list queries." },
+        "kind": { "type": "string", "enum": ["tool", "micro_job"], "description": "Whether listing is a lendable tool or micro-job." },
+        "title": { "type": "string", "description": "Short descriptive title." },
+        "description": { "type": "string", "description": "Detailed tool specs or micro-job instructions." },
+        "category": { "type": "string", "description": "Craft category tag (e.g. Power Tools, Yard Care, Quick Fix)." },
+        "rateCents": { "type": "integer", "description": "Rental rate or job payout in cents." },
+        "depositCents": { "type": "integer", "description": "Refundable security deposit in cents (0 for micro-jobs)." },
+        "distanceMiles": { "type": "number", "description": "Approximate distance within the block." },
+        "instantPickup": { "type": "boolean", "description": "True if ready for immediate porch pickup or claim." },
+        "photoUri": { "type": "string", "description": "Optional Photo Picker URI string or empty." },
+        "status": { "type": "string", "enum": ["available", "reserved", "paused"], "description": "Current listing availability." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update." }
+      },
+      "required": [
+        "circleId",
+        "ownerUid",
+        "ownerName",
+        "ownerTrustScore",
+        "memberUids",
+        "kind",
+        "title",
+        "description",
+        "category",
+        "rateCents",
+        "depositCents",
+        "distanceMiles",
+        "instantPickup",
+        "photoUri",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "Auditable micro-escrow hold and handoff record between requester and provider.",
+      "type": "object",
+      "properties": {
+        "listingId": { "type": "string", "description": "Target Listing document ID." },
+        "listingTitle": { "type": "string", "description": "Title snapshot of the listing." },
+        "listingKind": { "type": "string", "enum": ["tool", "micro_job"], "description": "Listing type." },
+        "circleId": { "type": "string", "description": "BlockCircle ID." },
+        "requesterUid": { "type": "string", "description": "UID of the borrower or job poster." },
+        "requesterName": { "type": "string", "description": "Display name of the requester." },
+        "providerUid": { "type": "string", "description": "UID of the tool lender or micro-job worker." },
+        "providerName": { "type": "string", "description": "Display name of the provider." },
+        "participantUids": { "type": "array", "description": "2-element array [requesterUid, providerUid]." },
+        "grossAmountCents": { "type": "integer", "description": "Rental or job rate in cents." },
+        "depositCents": { "type": "integer", "description": "Refundable escrow deposit in cents." },
+        "platformFeeCents": { "type": "integer", "description": "5% micro-escrow platform fee in cents." },
+        "providerNetCents": { "type": "integer", "description": "Net payout to provider in cents." },
+        "status": { "type": "string", "enum": ["requested", "escrow_held", "in_progress", "completed", "cancelled"], "description": "Escrow handoff state." },
+        "notes": { "type": "string", "description": "Pickup porch code or handoff note." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update." }
+      },
+      "required": [
+        "listingId",
+        "listingTitle",
+        "listingKind",
+        "circleId",
+        "requesterUid",
+        "requesterName",
+        "providerUid",
+        "providerName",
+        "participantUids",
+        "grossAmountCents",
+        "depositCents",
+        "platformFeeCents",
+        "providerNetCents",
+        "status",
+        "notes",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Owner-isolated neighbor profile, Pro Alerts config, and passive earnings summary."
+    },
+    "/circles/{circleId}": {
+      "schema": { "$ref": "#/entities/BlockCircle" },
+      "description": "Verified neighborhood block circles scoped to memberUids."
+    },
+    "/circleInvites/{inviteCode}": {
+      "schema": { "$ref": "#/entities/CircleInvite" },
+      "description": "Exact-code invite lookup documents (get allowed, list denied)."
+    },
+    "/listings/{listingId}": {
+      "schema": { "$ref": "#/entities/Listing" },
+      "description": "Tools and micro-jobs visible to members of the same BlockCircle."
+    },
+    "/bookings/{bookingId}": {
+      "schema": { "$ref": "#/entities/Booking" },
+      "description": "Micro-escrow bookings scoped strictly to participantUids."
+    }
+  }
+}
