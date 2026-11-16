@@ -31,6 +31,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ElectricBolt
@@ -42,6 +43,7 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -62,11 +64,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -77,36 +81,52 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.example.R
 import com.example.model.BlockCircle
 import com.example.model.CraftCategories
 import com.example.model.EscrowFeeBreakdown
 import com.example.model.Listing
+import com.example.model.ListingDraft
+import com.example.model.ListingPhotos
+import com.example.model.UiState
 import com.example.model.UserProfile
+import com.example.model.dataOrNull
 import com.example.ui.FeedFilter
 import com.example.ui.FeedFiltersState
 import com.example.ui.components.CraftCard
 import com.example.ui.components.EscrowBreakdownCard
 import com.example.ui.components.ListingCraftCard
+import com.example.ui.components.ListingPhotoCodec
 import com.example.ui.components.ListingThumbnail
 import com.example.ui.components.copyInviteCodeToClipboard
 import com.example.ui.components.formatCents
+import com.example.ui.components.formatMiles
 import com.example.ui.components.shareNeighborhoodInvite
+import com.example.ui.components.toTenthsOfAMile
 import com.example.ui.theme.MonoFigureStyle
-import com.example.ui.theme.ProAmber
-import com.example.ui.theme.ProAmberSoft
-import java.util.Locale
+import com.example.ui.theme.blockBenchColors
+import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+private val DISTANCE_OPTIONS = listOf(0.5, 1.5, 3.0, FeedFiltersState.ANY_DISTANCE_MILES)
+
+/**
+ * The active block's feed.
+ *
+ * [feed] is everything in the block and carries the loading / error state; [visibleListings] is
+ * the same list after the user's [filters]. Open sheets refer to listings by id and are resolved
+ * against [feed] on every recomposition, so they always show the listing as it is now (for
+ * example "Reserved" the moment a neighbour books it) and close by themselves if it is deleted.
+ */
 @Composable
 fun FeedScreen(
   currentUserId: String,
   profile: UserProfile?,
   activeCircle: BlockCircle,
-  listings: List<Listing>,
+  feed: UiState<List<Listing>>,
+  visibleListings: List<Listing>,
   proAlertMatches: List<Listing>,
   filters: FeedFiltersState,
   isBusy: Boolean,
@@ -115,45 +135,39 @@ fun FeedScreen(
   onOpenCreateSheet: () -> Unit,
   onOpenBlockSwitcher: () -> Unit,
   onKindFilterChange: (FeedFilter) -> Unit,
-  onCategoryToggle: (String?) -> Unit,
+  onCategoryToggle: (String) -> Unit,
   onMaxDistanceChange: (Double) -> Unit,
   onSearchQueryChange: (String) -> Unit,
-  onCreateListing: (
-    kind: String,
-    title: String,
-    description: String,
-    category: String,
-    rateCents: Long,
-    depositCents: Long,
-    distanceMiles: Double,
-    instantPickup: Boolean,
-    photoUri: String,
-  ) -> Unit,
-  onUpdateListing: (
-    listingId: String,
-    title: String,
-    description: String,
-    category: String,
-    rateCents: Long,
-    depositCents: Long,
-    distanceMiles: Double,
-    instantPickup: Boolean,
-    photoUri: String,
-    onDone: () -> Unit,
-  ) -> Unit,
+  onClearFilters: () -> Unit,
+  onRetry: () -> Unit,
+  onCreateListing: (ListingDraft) -> Unit,
+  onUpdateListing: (listingId: String, draft: ListingDraft, onDone: () -> Unit) -> Unit,
   onTogglePause: (Listing) -> Unit,
   onDeleteListing: (Listing) -> Unit,
-  onBookListing: (Listing, String, () -> Unit) -> Unit,
+  onBookListing: (listing: Listing, notes: String, onDone: () -> Unit) -> Unit,
   onOpenProAlertsTab: () -> Unit,
   onShowFeedback: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
-  var selectedListing by remember { mutableStateOf<Listing?>(null) }
-  var editingListing by remember { mutableStateOf<Listing?>(null) }
+  val brand = blockBenchColors
+  var selectedListingId by rememberSaveable { mutableStateOf<String?>(null) }
+  var editingListingId by rememberSaveable { mutableStateOf<String?>(null) }
   var showDistanceMenu by remember { mutableStateOf(false) }
 
-  val distanceOptions = listOf(0.5, 1.5, 3.0, 5.0)
+  val allListings = feed.dataOrNull().orEmpty()
+  val selectedListing = allListings.firstOrNull { it.id == selectedListingId }
+  val editingListing = allListings.firstOrNull { it.id == editingListingId }
+
+  // Forget ids whose listing is gone, so a sheet does not pop back up if the id is ever reused.
+  LaunchedEffect(feed, selectedListingId, editingListingId) {
+    if (feed is UiState.Success) {
+      if (selectedListingId != null && selectedListing == null) selectedListingId = null
+      if (editingListingId != null && editingListing == null) editingListingId = null
+    }
+  }
+
+  val proAlertsOn = profile?.proAlertsEnabled == true
 
   Column(modifier = modifier.fillMaxSize()) {
     // Top Block Bar
@@ -196,7 +210,7 @@ fun FeedScreen(
               }
               Text(
                 text =
-                  "${activeCircle.memberUids.size} neighbors · ${String.format(Locale.US, "%.1f", activeCircle.radiusMiles)} mi · Code ${activeCircle.inviteCode}",
+                  "${activeCircle.memberUids.size} neighbors · ${formatMiles(activeCircle.radiusMiles)} · Code ${activeCircle.inviteCode}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -209,14 +223,12 @@ fun FeedScreen(
             horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically,
           ) {
+            val pillContent =
+              if (proAlertsOn) brand.onProContainer else MaterialTheme.colorScheme.onSurfaceVariant
             Surface(
               onClick = onOpenProAlertsTab,
               color =
-                if (profile?.proAlertsEnabled == true) {
-                  ProAmberSoft
-                } else {
-                  MaterialTheme.colorScheme.surfaceVariant
-                },
+                if (proAlertsOn) brand.proContainer else MaterialTheme.colorScheme.surfaceVariant,
               shape = RoundedCornerShape(10.dp),
               modifier = Modifier.testTag("feed_pro_alerts_pill"),
             ) {
@@ -229,22 +241,12 @@ fun FeedScreen(
                   imageVector = Icons.Filled.NotificationsActive,
                   contentDescription = "Pro Alerts",
                   modifier = Modifier.size(16.dp),
-                  tint =
-                    if (profile?.proAlertsEnabled == true) {
-                      ProAmber
-                    } else {
-                      MaterialTheme.colorScheme.onSurfaceVariant
-                    },
+                  tint = pillContent,
                 )
                 Text(
-                  text = if (profile?.proAlertsEnabled == true) "PRO" else "Alerts",
+                  text = if (proAlertsOn) "PRO" else "Alerts",
                   style = MaterialTheme.typography.labelSmall,
-                  color =
-                    if (profile?.proAlertsEnabled == true) {
-                      ProAmber
-                    } else {
-                      MaterialTheme.colorScheme.onSurfaceVariant
-                    },
+                  color = pillContent,
                 )
               }
             }
@@ -304,8 +306,9 @@ fun FeedScreen(
           }
 
           Box {
+            val anyDistance = filters.maxDistanceMiles >= FeedFiltersState.ANY_DISTANCE_MILES
             FilterChip(
-              selected = filters.maxDistanceMiles < 5.0,
+              selected = !anyDistance,
               onClick = { showDistanceMenu = true },
               leadingIcon = {
                 Icon(
@@ -316,11 +319,7 @@ fun FeedScreen(
               },
               label = {
                 Text(
-                  if (filters.maxDistanceMiles >= 5.0) {
-                    "Any distance"
-                  } else {
-                    "≤ ${String.format(Locale.US, "%.1f", filters.maxDistanceMiles)} mi"
-                  }
+                  if (anyDistance) "Any distance" else "≤ ${formatMiles(filters.maxDistanceMiles)}"
                 )
               },
               modifier = Modifier.testTag("filter_chip_distance"),
@@ -329,14 +328,14 @@ fun FeedScreen(
               expanded = showDistanceMenu,
               onDismissRequest = { showDistanceMenu = false },
             ) {
-              distanceOptions.forEach { miles ->
+              DISTANCE_OPTIONS.forEach { miles ->
                 DropdownMenuItem(
                   text = {
                     Text(
-                      if (miles >= 5.0) {
-                        "All block distances (≤ 5.0 mi)"
+                      if (miles >= FeedFiltersState.ANY_DISTANCE_MILES) {
+                        "Any distance"
                       } else {
-                        "Within ${String.format(Locale.US, "%.1f", miles)} miles"
+                        "Within ${formatMiles(miles)}"
                       }
                     )
                   },
@@ -365,12 +364,16 @@ fun FeedScreen(
       }
     }
 
-    if (profile?.proAlertsEnabled == true && proAlertMatches.isNotEmpty()) {
+    val firstMatch = proAlertMatches.firstOrNull()
+    if (proAlertsOn && firstMatch != null) {
       Surface(
-        color = ProAmberSoft,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        color = brand.proContainer,
+        modifier =
+          Modifier.fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .testTag("pro_alert_banner"),
         shape = RoundedCornerShape(12.dp),
-        onClick = { selectedListing = proAlertMatches.first() },
+        onClick = { selectedListingId = firstMatch.id },
       ) {
         Row(
           modifier = Modifier.padding(12.dp),
@@ -379,81 +382,87 @@ fun FeedScreen(
         ) {
           Icon(
             imageVector = Icons.Filled.ElectricBolt,
-            contentDescription = "Pro Alert Match",
-            tint = ProAmber,
+            contentDescription = null,
+            tint = brand.onProContainer,
           )
           Column(modifier = Modifier.weight(1f)) {
             Text(
-              text = "${proAlertMatches.size} Pro Alert Match nearby",
+              text =
+                if (proAlertMatches.size == 1) {
+                  "1 Pro Alert match nearby"
+                } else {
+                  "${proAlertMatches.size} Pro Alert matches nearby"
+                },
               style = MaterialTheme.typography.labelLarge,
               color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-              text = "Tap to inspect ${proAlertMatches.first().title}",
+              text = "Tap to inspect ${firstMatch.title}",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
             )
           }
         }
       }
     }
 
-    if (listings.isEmpty()) {
-      val hasActiveFilters =
-        filters.kindFilter != FeedFilter.ALL ||
-          filters.selectedCategory != null ||
-          filters.searchQuery.isNotBlank() ||
-          filters.maxDistanceMiles < 5.0
-      EmptyBlockFeedState(
-        circle = activeCircle,
-        hasActiveFilters = hasActiveFilters,
-        onClearFilters = {
-          onKindFilterChange(FeedFilter.ALL)
-          onCategoryToggle(filters.selectedCategory)
-          onSearchQueryChange("")
-          onMaxDistanceChange(5.0)
-        },
-        onInviteNeighbors = {
-          shareNeighborhoodInvite(context, activeCircle.name, activeCircle.inviteCode)
-        },
-        onPostFirstListing = onOpenCreateSheet,
-        modifier = Modifier.weight(1f).fillMaxWidth(),
-      )
-    } else {
-      BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
-        val isWide = maxWidth >= 600.dp
-        if (isWide) {
-          LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 96.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize(),
-          ) {
-            items(listings, key = { it.id }) { listing ->
-              ListingCraftCard(
-                listing = listing,
-                isOwnListing = listing.ownerUid == currentUserId,
-                onClick = { selectedListing = listing },
-              )
+    val contentModifier = Modifier.weight(1f).fillMaxWidth()
+    when {
+      feed is UiState.Loading ->
+        Box(modifier = contentModifier, contentAlignment = Alignment.Center) {
+          CircularProgressIndicator(modifier = Modifier.testTag("feed_loading"))
+        }
+      feed is UiState.Error ->
+        FeedLoadError(message = feed.message, onRetry = onRetry, modifier = contentModifier)
+      visibleListings.isEmpty() ->
+        EmptyBlockFeedState(
+          circle = activeCircle,
+          hasActiveFilters = filters.isNarrowing,
+          onClearFilters = onClearFilters,
+          onInviteNeighbors = {
+            shareNeighborhoodInvite(context, activeCircle.name, activeCircle.inviteCode)
+          },
+          onPostFirstListing = onOpenCreateSheet,
+          modifier = contentModifier,
+        )
+      else ->
+        BoxWithConstraints(modifier = contentModifier) {
+          // Bottom padding keeps the last card clear of the floating "post" button.
+          val listPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 96.dp)
+          if (maxWidth >= 600.dp) {
+            LazyVerticalGrid(
+              columns = GridCells.Fixed(2),
+              contentPadding = listPadding,
+              horizontalArrangement = Arrangement.spacedBy(12.dp),
+              verticalArrangement = Arrangement.spacedBy(12.dp),
+              modifier = Modifier.fillMaxSize(),
+            ) {
+              items(visibleListings, key = { it.id }) { listing ->
+                ListingCraftCard(
+                  listing = listing,
+                  isOwnListing = listing.ownerUid == currentUserId,
+                  onClick = { selectedListingId = listing.id },
+                )
+              }
             }
-          }
-        } else {
-          LazyColumn(
-            contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 96.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize(),
-          ) {
-            items(listings, key = { it.id }) { listing ->
-              ListingCraftCard(
-                listing = listing,
-                isOwnListing = listing.ownerUid == currentUserId,
-                onClick = { selectedListing = listing },
-              )
+          } else {
+            LazyColumn(
+              contentPadding = listPadding,
+              verticalArrangement = Arrangement.spacedBy(12.dp),
+              modifier = Modifier.fillMaxSize(),
+            ) {
+              items(visibleListings, key = { it.id }) { listing ->
+                ListingCraftCard(
+                  listing = listing,
+                  isOwnListing = listing.ownerUid == currentUserId,
+                  onClick = { selectedListingId = listing.id },
+                )
+              }
             }
           }
         }
-      }
     }
   }
 
@@ -462,9 +471,7 @@ fun FeedScreen(
       existingListing = null,
       isBusy = isBusy,
       onDismiss = onDismissCreateSheet,
-      onSave = { kind, title, desc, cat, rate, deposit, dist, instant, photo ->
-        onCreateListing(kind, title, desc, cat, rate, deposit, dist, instant, photo)
-      },
+      onSave = onCreateListing,
     )
   }
 
@@ -472,22 +479,8 @@ fun FeedScreen(
     ListingEditorSheet(
       existingListing = target,
       isBusy = isBusy,
-      onDismiss = { editingListing = null },
-      onSave = { _, title, desc, cat, rate, deposit, dist, instant, photo ->
-        onUpdateListing(
-          target.id,
-          title,
-          desc,
-          cat,
-          rate,
-          deposit,
-          dist,
-          instant,
-          photo,
-        ) {
-          editingListing = null
-        }
-      },
+      onDismiss = { editingListingId = null },
+      onSave = { draft -> onUpdateListing(target.id, draft) { editingListingId = null } },
     )
   }
 
@@ -496,24 +489,52 @@ fun FeedScreen(
       listing = listing,
       isOwnListing = listing.ownerUid == currentUserId,
       isBusy = isBusy,
-      onDismiss = { selectedListing = null },
-      onBook = { notes ->
-        onBookListing(listing, notes) { selectedListing = null }
-      },
+      onDismiss = { selectedListingId = null },
+      onBook = { notes -> onBookListing(listing, notes) { selectedListingId = null } },
       onEdit = {
-        val target = listing
-        selectedListing = null
-        editingListing = target
+        selectedListingId = null
+        editingListingId = listing.id
       },
       onTogglePause = {
         onTogglePause(listing)
-        selectedListing = null
+        selectedListingId = null
       },
       onDelete = {
         onDeleteListing(listing)
-        selectedListing = null
+        selectedListingId = null
       },
     )
+  }
+}
+
+@Composable
+private fun FeedLoadError(
+  message: String,
+  onRetry: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Box(modifier = modifier, contentAlignment = Alignment.Center) {
+    Column(
+      modifier = Modifier.padding(24.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Icon(
+        imageVector = Icons.Filled.CloudOff,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.error,
+        modifier = Modifier.size(36.dp),
+      )
+      Text(
+        text = message,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+      )
+      Button(onClick = onRetry, modifier = Modifier.testTag("feed_retry_button")) {
+        Text(stringResource(id = R.string.retry_sync))
+      }
+    }
   }
 }
 
@@ -528,13 +549,14 @@ private fun EmptyBlockFeedState(
 ) {
   Box(modifier = modifier, contentAlignment = Alignment.Center) {
     Column(
-      modifier = Modifier.padding(24.dp).fillMaxWidth(),
+      // Scrolls rather than clips when the header leaves little room (landscape, large fonts).
+      modifier = Modifier.verticalScroll(rememberScrollState()).padding(24.dp).fillMaxWidth(),
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
       Image(
         painter = painterResource(id = R.drawable.img_workshop_hero),
-        contentDescription = "Empty neighborhood workbench",
+        contentDescription = null,
         modifier = Modifier.fillMaxWidth().height(160.dp).clip(RoundedCornerShape(18.dp)),
         contentScale = ContentScale.Crop,
       )
@@ -599,83 +621,86 @@ private fun EmptyBlockFeedState(
   }
 }
 
+/** Keeps what a numeric keyboard can produce for a money amount, in any locale. */
+private fun String.asAmountInput(): String = filter { it.isDigit() || it == '.' || it == ',' }.take(10)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ListingEditorSheet(
   existingListing: Listing?,
   isBusy: Boolean,
   onDismiss: () -> Unit,
-  onSave: (
-    kind: String,
-    title: String,
-    description: String,
-    category: String,
-    rateCents: Long,
-    depositCents: Long,
-    distanceMiles: Double,
-    instantPickup: Boolean,
-    photoUri: String,
-  ) -> Unit,
+  onSave: (ListingDraft) -> Unit,
 ) {
+  val context = LocalContext.current
+  val scope = rememberCoroutineScope()
   val isEditing = existingListing != null
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-  var selectedKindIdx by remember(existingListing?.id) {
-    mutableIntStateOf(if (existingListing?.kind == Listing.KIND_MICRO_JOB) 1 else 0)
-  }
-  var title by remember(existingListing?.id) { mutableStateOf(existingListing?.title ?: "") }
-  var description by remember(existingListing?.id) {
-    mutableStateOf(existingListing?.description ?: "")
-  }
-  var category by remember(existingListing?.id) {
-    mutableStateOf(existingListing?.category?.ifBlank { CraftCategories.all.first() } ?: CraftCategories.all.first())
-  }
-  var rateDollarsText by remember(existingListing?.id) {
-    mutableStateOf(
-      if (existingListing != null) {
-        String.format(Locale.US, "%.2f", existingListing.rateCents / 100.0).removeSuffix(".00")
-      } else {
-        "18"
-      }
-    )
-  }
-  var depositDollarsText by remember(existingListing?.id) {
-    mutableStateOf(
-      if (existingListing != null) {
-        String.format(Locale.US, "%.2f", existingListing.depositCents / 100.0).removeSuffix(".00")
-      } else {
-        "35"
-      }
-    )
-  }
-  var distanceMiles by remember(existingListing?.id) {
-    mutableDoubleStateOf(existingListing?.distanceMiles ?: 0.3)
-  }
-  var instantPickup by remember(existingListing?.id) {
-    mutableStateOf(existingListing?.instantPickup ?: true)
-  }
-  var photoUri by remember(existingListing?.id) { mutableStateOf(existingListing?.photoUri ?: "") }
+
+  // Keyed on the listing id only: the form must not reset under the user's fingers when the
+  // listing document changes for another reason while it is being edited.
+  val formKey = existingListing?.id
+  var isJob by remember(formKey) { mutableStateOf(existingListing?.isMicroJob == true) }
+  var title by remember(formKey) { mutableStateOf(existingListing?.title.orEmpty()) }
+  var description by remember(formKey) { mutableStateOf(existingListing?.description.orEmpty()) }
+  var category by
+    remember(formKey) {
+      mutableStateOf(
+        existingListing?.category?.takeIf { it.isNotBlank() } ?: CraftCategories.all.first()
+      )
+    }
+  var rateDollarsText by
+    remember(formKey) {
+      mutableStateOf(existingListing?.let { CraftCategories.centsToDollarsInput(it.rateCents) } ?: "18")
+    }
+  var depositDollarsText by
+    remember(formKey) {
+      mutableStateOf(
+        existingListing?.let { CraftCategories.centsToDollarsInput(it.depositCents) } ?: "35"
+      )
+    }
+  var distanceMiles by
+    remember(formKey) { mutableDoubleStateOf(existingListing?.distanceMiles ?: 0.3) }
+  var instantPickup by remember(formKey) { mutableStateOf(existingListing?.instantPickup ?: true) }
+  // A photo saved by an older app version is a device-local URI nobody else can load; drop it.
+  var photoUri by
+    remember(formKey) { mutableStateOf(ListingPhotos.sanitize(existingListing?.photoUri.orEmpty())) }
+  var isReadingPhoto by remember(formKey) { mutableStateOf(false) }
+  var photoError by remember(formKey) { mutableStateOf<String?>(null) }
 
   val photoPickerLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
       if (uri != null) {
-        photoUri = uri.toString()
+        scope.launch {
+          isReadingPhoto = true
+          photoError = null
+          try {
+            val thumbnail = ListingPhotoCodec.encodeThumbnail(context, uri)
+            if (thumbnail != null) {
+              photoUri = thumbnail
+            } else {
+              photoError = "That photo could not be read. Try a different one."
+            }
+          } finally {
+            isReadingPhoto = false
+          }
+        }
       }
     }
 
-  val isJob = selectedKindIdx == 1
   val parsedRateCents = CraftCategories.parseDollarsToCents(rateDollarsText)
   val parsedDepositCents =
     if (isJob) 0L else CraftCategories.parseDollarsToCents(depositDollarsText)
   val validationHint =
     when {
       title.trim().length < 3 -> "Enter at least 3 characters for the title."
-      parsedRateCents == null || parsedRateCents !in 100L..500_000L ->
+      parsedRateCents == null ||
+        parsedRateCents !in Listing.MIN_RATE_CENTS..Listing.MAX_AMOUNT_CENTS ->
         "Rate must be between $1.00 and $5,000.00."
-      parsedDepositCents == null || parsedDepositCents !in 0L..500_000L ->
+      parsedDepositCents == null || parsedDepositCents !in 0L..Listing.MAX_AMOUNT_CENTS ->
         "Deposit must be between $0.00 and $5,000.00."
       else -> null
     }
-  val isValid = validationHint == null
 
   ModalBottomSheet(
     onDismissRequest = onDismiss,
@@ -694,19 +719,20 @@ private fun ListingEditorSheet(
         style = MaterialTheme.typography.headlineSmall,
       )
 
+      // A listing's kind is fixed once it exists (bookings depend on it).
       if (!isEditing) {
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
           SegmentedButton(
-            selected = selectedKindIdx == 0,
-            onClick = { selectedKindIdx = 0 },
+            selected = !isJob,
+            onClick = { isJob = false },
             shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
             modifier = Modifier.testTag("create_kind_tool"),
           ) {
             Text("Lend a Tool")
           }
           SegmentedButton(
-            selected = selectedKindIdx == 1,
-            onClick = { selectedKindIdx = 1 },
+            selected = isJob,
+            onClick = { isJob = true },
             shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
             modifier = Modifier.testTag("create_kind_job"),
           ) {
@@ -717,7 +743,7 @@ private fun ListingEditorSheet(
 
       OutlinedTextField(
         value = title,
-        onValueChange = { title = it.take(80) },
+        onValueChange = { title = it.take(Listing.MAX_TITLE_LENGTH) },
         label = { Text(if (isJob) "Micro-Job Title" else "Tool Name & Spec") },
         placeholder = {
           Text(if (isJob) "e.g. Fix Backyard Gate Latch" else "e.g. DeWalt Pressure Washer")
@@ -728,7 +754,7 @@ private fun ListingEditorSheet(
 
       OutlinedTextField(
         value = description,
-        onValueChange = { description = it.take(400) },
+        onValueChange = { description = it.take(Listing.MAX_DESCRIPTION_LENGTH) },
         label = { Text("Notes & Handoff Details") },
         minLines = 2,
         maxLines = 4,
@@ -754,7 +780,7 @@ private fun ListingEditorSheet(
       ) {
         OutlinedTextField(
           value = rateDollarsText,
-          onValueChange = { rateDollarsText = it.filter { ch -> ch.isDigit() || ch == '.' } },
+          onValueChange = { rateDollarsText = it.asAmountInput() },
           label = { Text(if (isJob) "Payout ($)" else "Rate ($)") },
           keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
           singleLine = true,
@@ -763,9 +789,7 @@ private fun ListingEditorSheet(
         if (!isJob) {
           OutlinedTextField(
             value = depositDollarsText,
-            onValueChange = {
-              depositDollarsText = it.filter { ch -> ch.isDigit() || ch == '.' }
-            },
+            onValueChange = { depositDollarsText = it.asAmountInput() },
             label = { Text("Deposit ($)") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             singleLine = true,
@@ -781,20 +805,24 @@ private fun ListingEditorSheet(
         ) {
           Text("Distance on Block", style = MaterialTheme.typography.labelLarge)
           Text(
-            text = String.format(Locale.US, "%.1f mi", distanceMiles),
+            text = formatMiles(distanceMiles),
             style = MonoFigureStyle,
             color = MaterialTheme.colorScheme.primary,
           )
         }
         Slider(
           value = distanceMiles.toFloat(),
-          onValueChange = { distanceMiles = it.toDouble() },
+          onValueChange = { distanceMiles = it.toTenthsOfAMile() },
           valueRange = 0.1f..5.0f,
           modifier = Modifier.testTag("create_distance_slider"),
         )
       }
 
-      if (parsedRateCents != null && parsedRateCents >= 100L && parsedDepositCents != null) {
+      if (
+        parsedRateCents != null &&
+          parsedRateCents >= Listing.MIN_RATE_CENTS &&
+          parsedDepositCents != null
+      ) {
         EscrowBreakdownCard(
           breakdown = EscrowFeeBreakdown.calculate(parsedRateCents, parsedDepositCents),
           isMicroJob = isJob,
@@ -817,6 +845,7 @@ private fun ListingEditorSheet(
         Switch(
           checked = instantPickup,
           onCheckedChange = { instantPickup = it },
+          modifier = Modifier.testTag("create_instant_switch"),
         )
       }
 
@@ -831,29 +860,36 @@ private fun ListingEditorSheet(
               PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
             )
           },
+          enabled = !isReadingPhoto,
           modifier = Modifier.weight(1f).testTag("pick_photo_button"),
         ) {
-          Icon(
-            imageVector = Icons.Filled.Image,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp),
-          )
+          if (isReadingPhoto) {
+            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+          } else {
+            Icon(
+              imageVector = Icons.Filled.Image,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp),
+            )
+          }
           Spacer(modifier = Modifier.width(6.dp))
           Text(if (photoUri.isBlank()) "Add Photo (Optional)" else "Change Photo")
         }
         if (photoUri.isNotBlank()) {
-          AsyncImage(
-            model = photoUri,
-            contentDescription = "Selected listing photo",
-            modifier = Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)),
-            contentScale = ContentScale.Crop,
-          )
+          ListingThumbnail(photoUri = photoUri, title = title, isJob = isJob, size = 48.dp)
+          TextButton(
+            onClick = { photoUri = "" },
+            modifier = Modifier.testTag("remove_photo_button"),
+          ) {
+            Text("Remove")
+          }
         }
       }
 
-      if (validationHint != null) {
+      val hint = photoError ?: validationHint
+      if (hint != null) {
         Text(
-          text = validationHint,
+          text = hint,
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.error,
         )
@@ -862,18 +898,20 @@ private fun ListingEditorSheet(
       Button(
         onClick = {
           onSave(
-            if (isJob) Listing.KIND_MICRO_JOB else Listing.KIND_TOOL,
-            title,
-            description,
-            category,
-            parsedRateCents ?: 0L,
-            parsedDepositCents ?: 0L,
-            distanceMiles,
-            instantPickup,
-            photoUri,
+            ListingDraft(
+              kind = if (isJob) Listing.KIND_MICRO_JOB else Listing.KIND_TOOL,
+              title = title,
+              description = description,
+              category = category,
+              rateCents = parsedRateCents ?: 0L,
+              depositCents = parsedDepositCents ?: 0L,
+              distanceMiles = distanceMiles,
+              instantPickup = instantPickup,
+              photoUri = photoUri,
+            )
           )
         },
-        enabled = isValid && !isBusy,
+        enabled = validationHint == null && !isBusy && !isReadingPhoto,
         modifier = Modifier.fillMaxWidth().height(52.dp).testTag("publish_listing_button"),
       ) {
         Text(
@@ -905,8 +943,11 @@ private fun ListingDetailSheet(
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   var notes by remember { mutableStateOf("") }
   var showDeleteConfirm by remember { mutableStateOf(false) }
-  val isJob = listing.kind == Listing.KIND_MICRO_JOB
+  val isJob = listing.isMicroJob
   val breakdown = EscrowFeeBreakdown.calculate(listing.rateCents, listing.depositCents)
+  // A booking in flight holds the listing: it can be edited, but not paused or deleted.
+  val isHeldByBooking =
+    listing.status == Listing.STATUS_RESERVED && !listing.hasUntrackedReservation
 
   ModalBottomSheet(
     onDismissRequest = onDismiss,
@@ -928,7 +969,6 @@ private fun ListingDetailSheet(
         ListingThumbnail(
           photoUri = listing.photoUri,
           title = listing.title,
-          category = listing.category,
           isJob = isJob,
           size = 72.dp,
         )
@@ -936,7 +976,8 @@ private fun ListingDetailSheet(
           Text(text = listing.title, style = MaterialTheme.typography.headlineSmall)
           Text(
             text =
-              "${listing.category} · ${String.format(Locale.US, "%.1f", listing.distanceMiles)} mi · By ${listing.ownerName}",
+              "${listing.category} · ${formatMiles(listing.distanceMiles)} · " +
+                if (isOwnListing) "Posted by you" else "By ${listing.ownerName}",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -956,12 +997,25 @@ private fun ListingDetailSheet(
       EscrowBreakdownCard(breakdown = breakdown, isMicroJob = isJob)
 
       if (isOwnListing) {
+        if (listing.status == Listing.STATUS_RESERVED) {
+          DetailNotice(
+            text =
+              if (isHeldByBooking) {
+                "A neighbor has a booking on this. Manage it in the Escrow tab; you can pause or " +
+                  "delete the listing once that booking is settled."
+              } else {
+                "This is still marked reserved from an earlier booking. Clear the reservation " +
+                  "to put it back on the feed."
+              }
+          )
+        }
         Row(
           modifier = Modifier.fillMaxWidth(),
           horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
           OutlinedButton(
             onClick = onEdit,
+            enabled = !isBusy,
             modifier = Modifier.weight(1f).testTag("edit_listing_button"),
           ) {
             Icon(
@@ -974,15 +1028,22 @@ private fun ListingDetailSheet(
           }
           OutlinedButton(
             onClick = onTogglePause,
+            enabled = !isBusy && !isHeldByBooking,
             modifier = Modifier.weight(1f).testTag("toggle_pause_listing_button"),
           ) {
             Text(
-              text = if (listing.status == Listing.STATUS_PAUSED) "Resume" else "Pause",
+              text =
+                when (listing.status) {
+                  Listing.STATUS_AVAILABLE -> "Pause"
+                  Listing.STATUS_PAUSED -> "Resume"
+                  else -> "Clear"
+                },
               maxLines = 1,
             )
           }
           TextButton(
             onClick = { showDeleteConfirm = true },
+            enabled = !isBusy && listing.status != Listing.STATUS_RESERVED,
             colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
             modifier = Modifier.testTag("delete_listing_button"),
           ) {
@@ -1012,18 +1073,23 @@ private fun ListingDetailSheet(
               }
           )
         }
+        Text(
+          text =
+            "${listing.ownerName} approves the request before anything is locked in. " +
+              "You can cancel any time before the handoff.",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
       } else {
-        Surface(
-          color = MaterialTheme.colorScheme.surfaceVariant,
-          shape = RoundedCornerShape(12.dp),
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Text(
-            text = "This listing is currently ${listing.status}.",
-            modifier = Modifier.padding(14.dp),
-            style = MaterialTheme.typography.bodyMedium,
-          )
-        }
+        DetailNotice(
+          text =
+            if (listing.status == Listing.STATUS_PAUSED) {
+              "${listing.ownerName} has paused this listing for now."
+            } else {
+              "A neighbor has this reserved right now. It returns to the feed when they are done."
+            },
+          modifier = Modifier.testTag("listing_unavailable_notice"),
+        )
       }
 
       Spacer(modifier = Modifier.height(16.dp))
@@ -1042,6 +1108,7 @@ private fun ListingDetailSheet(
             onDelete()
           },
           colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+          modifier = Modifier.testTag("confirm_delete_listing_button"),
         ) {
           Text("Delete")
         }
@@ -1049,6 +1116,22 @@ private fun ListingDetailSheet(
       dismissButton = {
         TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") }
       },
+    )
+  }
+}
+
+@Composable
+private fun DetailNotice(text: String, modifier: Modifier = Modifier) {
+  Surface(
+    color = MaterialTheme.colorScheme.surfaceVariant,
+    shape = RoundedCornerShape(12.dp),
+    modifier = modifier.fillMaxWidth(),
+  ) {
+    Text(
+      text = text,
+      modifier = Modifier.padding(14.dp),
+      style = MaterialTheme.typography.bodyMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
   }
 }

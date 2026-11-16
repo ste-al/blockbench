@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,14 +15,19 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -37,24 +43,28 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.R
 import com.example.model.Booking
-import com.example.model.Listing
+import com.example.model.EscrowFeeBreakdown
+import com.example.model.EscrowWorkflow
+import com.example.model.UiState
+import com.example.model.dataOrNull
+import com.example.ui.components.CraftBadge
 import com.example.ui.components.CraftCard
 import com.example.ui.components.LedgerRow
 import com.example.ui.components.formatCents
-import com.example.ui.theme.EscrowSage
-import com.example.ui.theme.EscrowSageSoft
 import com.example.ui.theme.MonoFigureStyle
-import com.example.ui.theme.ProAmber
-import com.example.ui.theme.ProAmberSoft
+import com.example.ui.theme.blockBenchColors
 
 private enum class EscrowRoleFilter(val label: String) {
   ALL("All"),
@@ -62,18 +72,33 @@ private enum class EscrowRoleFilter(val label: String) {
   REQUESTING("Borrowing / Hiring"),
 }
 
+private enum class EscrowTab {
+  ACTIVE,
+  SETTLED,
+}
+
+/**
+ * The user's escrow ledger. Each booking offers only the steps the signed-in neighbour may take
+ * (see [EscrowWorkflow]): the listing owner approves a request and confirms completion, and the
+ * other side sees what it is waiting for instead of buttons the security rules would refuse.
+ */
 @Composable
 fun EscrowScreen(
   currentUserId: String,
-  bookings: List<Booking>,
+  ledger: UiState<List<Booking>>,
   isBusy: Boolean,
-  onAdvanceStatus: (Booking, String, String) -> Unit,
+  onAdvanceStatus: (booking: Booking, nextStatus: String, notes: String) -> Unit,
+  onRetry: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  var tabIdx by remember { mutableIntStateOf(0) } // 0 = Active, 1 = Settled
-  var roleFilter by remember { mutableStateOf(EscrowRoleFilter.ALL) }
-  var pendingCancelBooking by remember { mutableStateOf<Booking?>(null) }
-  var pendingNoteDialog by remember { mutableStateOf<Pair<Booking, String>?>(null) }
+  val brand = blockBenchColors
+  val bookings = ledger.dataOrNull().orEmpty()
+
+  var tab by rememberSaveable { mutableStateOf(EscrowTab.ACTIVE) }
+  var roleFilter by rememberSaveable { mutableStateOf(EscrowRoleFilter.ALL) }
+  // Dialogs refer to bookings by id and read the live booking, never a stale copy.
+  var cancelBookingId by rememberSaveable { mutableStateOf<String?>(null) }
+  var noteDialog by rememberSaveable { mutableStateOf<Pair<String, String>?>(null) }
 
   val roleFiltered =
     remember(bookings, roleFilter, currentUserId) {
@@ -83,29 +108,20 @@ fun EscrowScreen(
         EscrowRoleFilter.REQUESTING -> bookings.filter { it.requesterUid == currentUserId }
       }
     }
-
-  val activeBookings =
-    remember(roleFiltered) {
-      roleFiltered.filter {
-        it.status != Booking.STATUS_COMPLETED && it.status != Booking.STATUS_CANCELLED
-      }
-    }
-  val settledBookings =
-    remember(roleFiltered) {
-      roleFiltered.filter {
-        it.status == Booking.STATUS_COMPLETED || it.status == Booking.STATUS_CANCELLED
-      }
-    }
-  val displayed = if (tabIdx == 0) activeBookings else settledBookings
+  val activeBookings = remember(roleFiltered) { roleFiltered.filter { it.isActive } }
+  val settledBookings = remember(roleFiltered) { roleFiltered.filterNot { it.isActive } }
+  val displayed = if (tab == EscrowTab.ACTIVE) activeBookings else settledBookings
 
   val heldCents =
-    bookings
-      .filter { it.status != Booking.STATUS_COMPLETED && it.status != Booking.STATUS_CANCELLED }
-      .sumOf { it.grossAmountCents + it.depositCents }
+    remember(bookings) {
+      bookings.filter { it.isActive }.sumOf { it.grossAmountCents + it.depositCents }
+    }
   val earnedCents =
-    bookings
-      .filter { it.status == Booking.STATUS_COMPLETED && it.providerUid == currentUserId }
-      .sumOf { it.providerNetCents }
+    remember(bookings, currentUserId) {
+      bookings
+        .filter { it.status == Booking.STATUS_COMPLETED && it.providerUid == currentUserId }
+        .sumOf { it.providerNetCents }
+    }
 
   Column(modifier = modifier.fillMaxSize()) {
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp) {
@@ -137,19 +153,19 @@ fun EscrowScreen(
             }
           }
           CraftCard(
-            containerColor = EscrowSageSoft,
+            containerColor = brand.escrowContainer,
             modifier = Modifier.weight(1f),
           ) {
             Column(modifier = Modifier.padding(12.dp)) {
               Text(
                 text = "RELEASED PAYOUTS",
                 style = MaterialTheme.typography.labelSmall,
-                color = EscrowSage,
+                color = brand.onEscrowContainer,
               )
               Text(
                 text = formatCents(earnedCents),
                 style = MonoFigureStyle,
-                color = EscrowSage,
+                color = brand.onEscrowContainer,
               )
             }
           }
@@ -157,16 +173,16 @@ fun EscrowScreen(
 
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
           SegmentedButton(
-            selected = tabIdx == 0,
-            onClick = { tabIdx = 0 },
+            selected = tab == EscrowTab.ACTIVE,
+            onClick = { tab = EscrowTab.ACTIVE },
             shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
             modifier = Modifier.testTag("escrow_tab_active"),
           ) {
             Text("Active (${activeBookings.size})")
           }
           SegmentedButton(
-            selected = tabIdx == 1,
-            onClick = { tabIdx = 1 },
+            selected = tab == EscrowTab.SETTLED,
+            onClick = { tab = EscrowTab.SETTLED },
             shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
             modifier = Modifier.testTag("escrow_tab_settled"),
           ) {
@@ -175,7 +191,7 @@ fun EscrowScreen(
         }
 
         Row(
-          modifier = Modifier.fillMaxWidth(),
+          modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
           horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
           EscrowRoleFilter.entries.forEach { option ->
@@ -190,88 +206,141 @@ fun EscrowScreen(
       }
     }
 
-    if (displayed.isEmpty()) {
-      Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-        Column(
-          modifier = Modifier.padding(24.dp),
-          horizontalAlignment = Alignment.CenterHorizontally,
-          verticalArrangement = Arrangement.spacedBy(8.dp),
+    val contentModifier = Modifier.weight(1f).fillMaxWidth()
+    when {
+      ledger is UiState.Loading ->
+        Box(modifier = contentModifier, contentAlignment = Alignment.Center) {
+          CircularProgressIndicator(modifier = Modifier.testTag("escrow_loading"))
+        }
+      ledger is UiState.Error ->
+        Box(modifier = contentModifier, contentAlignment = Alignment.Center) {
+          Column(
+            modifier = Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Filled.CloudOff,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.error,
+              modifier = Modifier.size(36.dp),
+            )
+            Text(
+              text = ledger.message,
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              textAlign = TextAlign.Center,
+            )
+            Button(onClick = onRetry, modifier = Modifier.testTag("escrow_retry_button")) {
+              Text(stringResource(id = R.string.retry_sync))
+            }
+          }
+        }
+      displayed.isEmpty() ->
+        Box(modifier = contentModifier, contentAlignment = Alignment.Center) {
+          Column(
+            modifier = Modifier.verticalScroll(rememberScrollState()).padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Filled.Lock,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.secondary,
+              modifier = Modifier.size(40.dp),
+            )
+            Text(
+              text =
+                if (tab == EscrowTab.ACTIVE) "No active escrow holds" else "No settled handoffs yet",
+              style = MaterialTheme.typography.titleLarge,
+            )
+            Text(
+              text =
+                "Book a neighbor's tool or claim a micro-job from the Block Feed to track escrow " +
+                  "holds and ${EscrowFeeBreakdown.PLATFORM_FEE_PERCENT}% platform fee splits here.",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              textAlign = TextAlign.Center,
+            )
+          }
+        }
+      else ->
+        LazyColumn(
+          contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 96.dp),
+          verticalArrangement = Arrangement.spacedBy(12.dp),
+          modifier = contentModifier,
         ) {
-          Icon(
-            imageVector = Icons.Filled.Lock,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.secondary,
-            modifier = Modifier.size(40.dp),
-          )
-          Text(
-            text = if (tabIdx == 0) "No active escrow holds" else "No settled handoffs yet",
-            style = MaterialTheme.typography.titleLarge,
-          )
-          Text(
-            text =
-              "Book a neighbor's tool or claim a micro-job from the Block Feed to track escrow holds and 5% platform fee splits here.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
+          items(displayed, key = { it.id }) { booking ->
+            BookingEscrowCard(
+              booking = booking,
+              currentUserId = currentUserId,
+              isBusy = isBusy,
+              onAdvance = { next ->
+                if (next == Booking.STATUS_ESCROW_HELD || next == Booking.STATUS_IN_PROGRESS) {
+                  noteDialog = booking.id to next
+                } else {
+                  onAdvanceStatus(booking, next, booking.notes)
+                }
+              },
+              onRequestCancel = { cancelBookingId = booking.id },
+            )
+          }
         }
-      }
-    } else {
-      LazyColumn(
-        contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 96.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.weight(1f).fillMaxWidth(),
-      ) {
-        items(displayed, key = { it.id }) { booking ->
-          BookingEscrowCard(
-            booking = booking,
-            isProvider = booking.providerUid == currentUserId,
-            isBusy = isBusy,
-            onAdvanceWithNote = { next ->
-              if (next == Booking.STATUS_ESCROW_HELD || next == Booking.STATUS_IN_PROGRESS) {
-                pendingNoteDialog = booking to next
-              } else {
-                onAdvanceStatus(booking, next, booking.notes)
-              }
-            },
-            onRequestCancel = { pendingCancelBooking = booking },
-          )
-        }
-      }
     }
   }
 
-  pendingCancelBooking?.let { booking ->
-    val isRefund = booking.status == Booking.STATUS_ESCROW_HELD
-    AlertDialog(
-      onDismissRequest = { pendingCancelBooking = null },
-      title = { Text(if (isRefund) "Refund Escrow Hold?" else "Cancel Request?") },
-      text = {
-        Text(
-          "This will release \"${booking.listingTitle}\" back to your neighborhood block feed."
-        )
-      },
-      confirmButton = {
-        Button(
-          onClick = {
-            onAdvanceStatus(booking, Booking.STATUS_CANCELLED, booking.notes)
-            pendingCancelBooking = null
-          },
-          colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-        ) {
-          Text(if (isRefund) "Confirm Refund" else "Cancel Hold")
+  bookings
+    .firstOrNull { it.id == cancelBookingId }
+    ?.let { booking ->
+      val isOwner = currentUserId == booking.listingOwnerUid
+      val title =
+        when {
+          booking.status == Booking.STATUS_ESCROW_HELD -> "Cancel and refund the escrow hold?"
+          isOwner -> "Decline this request?"
+          else -> "Cancel your request?"
         }
-      },
-      dismissButton = {
-        TextButton(onClick = { pendingCancelBooking = null }) { Text("Keep Hold") }
-      },
-    )
-  }
+      AlertDialog(
+        onDismissRequest = { cancelBookingId = null },
+        title = { Text(title) },
+        text = {
+          Text(
+            "\"${booking.listingTitle}\" goes back on the block feed and nothing is charged. " +
+              "This cannot be undone."
+          )
+        },
+        confirmButton = {
+          Button(
+            onClick = {
+              onAdvanceStatus(booking, Booking.STATUS_CANCELLED, booking.notes)
+              cancelBookingId = null
+            },
+            enabled = !isBusy,
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+            modifier = Modifier.testTag("confirm_cancel_booking_button"),
+          ) {
+            Text(
+              when {
+                booking.status == Booking.STATUS_ESCROW_HELD -> "Cancel & Refund"
+                isOwner -> "Decline"
+                else -> "Cancel Request"
+              }
+            )
+          }
+        },
+        dismissButton = { TextButton(onClick = { cancelBookingId = null }) { Text("Keep It") } },
+      )
+    }
 
-  pendingNoteDialog?.let { (booking, nextStatus) ->
-    var noteInput by remember(booking.id, nextStatus) { mutableStateOf(booking.notes) }
+  val noteTarget =
+    noteDialog?.let { (bookingId, nextStatus) ->
+      bookings.firstOrNull { it.id == bookingId }?.let { it to nextStatus }
+    }
+  if (noteTarget != null) {
+    val (booking, nextStatus) = noteTarget
+    var noteInput by rememberSaveable(booking.id, nextStatus) { mutableStateOf(booking.notes) }
     val isLocking = nextStatus == Booking.STATUS_ESCROW_HELD
     AlertDialog(
-      onDismissRequest = { pendingNoteDialog = null },
+      onDismissRequest = { noteDialog = null },
       title = {
         Row(
           verticalAlignment = Alignment.CenterVertically,
@@ -282,7 +351,7 @@ fun EscrowScreen(
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
           )
-          Text(if (isLocking) "Lock Escrow & Porch Note" else "Start Handoff Check-In")
+          Text(if (isLocking) "Approve & Lock Escrow" else "Start Handoff Check-In")
         }
       },
       text = {
@@ -299,7 +368,7 @@ fun EscrowScreen(
           )
           OutlinedTextField(
             value = noteInput,
-            onValueChange = { noteInput = it.take(250) },
+            onValueChange = { noteInput = it.take(Booking.MAX_NOTES_LENGTH) },
             label = { Text("Porch PIN / Handoff Note") },
             placeholder = { Text("e.g. Side gate code 4812") },
             singleLine = true,
@@ -311,7 +380,7 @@ fun EscrowScreen(
         Button(
           onClick = {
             onAdvanceStatus(booking, nextStatus, noteInput)
-            pendingNoteDialog = null
+            noteDialog = null
           },
           enabled = !isBusy,
           modifier = Modifier.testTag("confirm_handoff_dialog_button"),
@@ -319,9 +388,7 @@ fun EscrowScreen(
           Text(if (isLocking) "Lock Escrow" else "Start Handoff")
         }
       },
-      dismissButton = {
-        TextButton(onClick = { pendingNoteDialog = null }) { Text("Back") }
-      },
+      dismissButton = { TextButton(onClick = { noteDialog = null }) { Text("Back") } },
     )
   }
 }
@@ -329,11 +396,16 @@ fun EscrowScreen(
 @Composable
 private fun BookingEscrowCard(
   booking: Booking,
-  isProvider: Boolean,
+  currentUserId: String,
   isBusy: Boolean,
-  onAdvanceWithNote: (String) -> Unit,
+  onAdvance: (nextStatus: String) -> Unit,
   onRequestCancel: () -> Unit,
 ) {
+  val brand = blockBenchColors
+  val isProvider = booking.providerUid == currentUserId
+  val allowed = EscrowWorkflow.allowedNextStatuses(booking, currentUserId)
+  val ownerName = booking.listingOwnerName.ifBlank { "the listing owner" }
+
   val stepProgress =
     when (booking.status) {
       Booking.STATUS_REQUESTED -> 0.25f
@@ -342,19 +414,20 @@ private fun BookingEscrowCard(
       Booking.STATUS_COMPLETED -> 1.0f
       else -> 0.0f
     }
-
   val statusBadgeColor =
     when (booking.status) {
-      Booking.STATUS_COMPLETED -> EscrowSageSoft
+      Booking.STATUS_COMPLETED -> brand.escrowContainer
       Booking.STATUS_CANCELLED -> MaterialTheme.colorScheme.errorContainer
-      Booking.STATUS_ESCROW_HELD, Booking.STATUS_IN_PROGRESS -> ProAmberSoft
+      Booking.STATUS_ESCROW_HELD,
+      Booking.STATUS_IN_PROGRESS -> brand.proContainer
       else -> MaterialTheme.colorScheme.primaryContainer
     }
   val statusTextColor =
     when (booking.status) {
-      Booking.STATUS_COMPLETED -> EscrowSage
-      Booking.STATUS_CANCELLED -> MaterialTheme.colorScheme.error
-      Booking.STATUS_ESCROW_HELD, Booking.STATUS_IN_PROGRESS -> ProAmber
+      Booking.STATUS_COMPLETED -> brand.onEscrowContainer
+      Booking.STATUS_CANCELLED -> MaterialTheme.colorScheme.onErrorContainer
+      Booking.STATUS_ESCROW_HELD,
+      Booking.STATUS_IN_PROGRESS -> brand.onProContainer
       else -> MaterialTheme.colorScheme.onPrimaryContainer
     }
 
@@ -365,25 +438,27 @@ private fun BookingEscrowCard(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Surface(
-          color = if (isProvider) EscrowSageSoft else MaterialTheme.colorScheme.secondaryContainer,
-          shape = RoundedCornerShape(6.dp),
-        ) {
-          Text(
-            text = if (isProvider) "YOU EARN" else "YOU REQUESTED",
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = if (isProvider) EscrowSage else MaterialTheme.colorScheme.onSecondaryContainer,
-          )
-        }
-        Surface(color = statusBadgeColor, shape = RoundedCornerShape(8.dp)) {
-          Text(
-            text = booking.status.replace("_", " ").uppercase(),
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = statusTextColor,
-          )
-        }
+        CraftBadge(
+          text =
+            when {
+              isProvider -> "YOU EARN"
+              booking.isMicroJob -> "YOU HIRE"
+              else -> "YOU BORROW"
+            },
+          containerColor =
+            if (isProvider) brand.escrowContainer else MaterialTheme.colorScheme.secondaryContainer,
+          contentColor =
+            if (isProvider) {
+              brand.onEscrowContainer
+            } else {
+              MaterialTheme.colorScheme.onSecondaryContainer
+            },
+        )
+        CraftBadge(
+          text = booking.status.replace("_", " ").uppercase(),
+          containerColor = statusBadgeColor,
+          contentColor = statusTextColor,
+        )
       }
 
       Column {
@@ -393,7 +468,7 @@ private fun BookingEscrowCard(
             if (isProvider) {
               "With ${booking.requesterName} · Net payout ${formatCents(booking.providerNetCents)}"
             } else {
-              "With ${booking.providerName} · ${if (booking.listingKind == Listing.KIND_TOOL) "Tool Rental" else "Micro-Job"}"
+              "With ${booking.providerName} · ${if (booking.isMicroJob) "Micro-Job" else "Tool Rental"}"
             },
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -406,7 +481,7 @@ private fun BookingEscrowCard(
           modifier = Modifier.fillMaxWidth().height(6.dp),
           color =
             if (booking.status == Booking.STATUS_COMPLETED) {
-              EscrowSage
+              brand.escrow
             } else {
               MaterialTheme.colorScheme.primary
             },
@@ -429,80 +504,137 @@ private fun BookingEscrowCard(
         }
       }
 
-      HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
       LedgerRow("Gross Rate", formatCents(booking.grossAmountCents))
       if (booking.depositCents > 0L) {
         LedgerRow("Refundable Deposit", formatCents(booking.depositCents))
       }
-      LedgerRow("5% Micro-Escrow Fee", formatCents(booking.platformFeeCents))
+      LedgerRow(
+        "${EscrowFeeBreakdown.PLATFORM_FEE_PERCENT}% Micro-Escrow Fee",
+        formatCents(booking.platformFeeCents),
+      )
       LedgerRow(
         label = "Net Provider Payout",
         value = formatCents(booking.providerNetCents),
         bold = true,
-        valueColor = EscrowSage,
+        valueColor = brand.escrow,
       )
 
       when (booking.status) {
-        Booking.STATUS_REQUESTED -> {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            OutlinedButton(
-              onClick = onRequestCancel,
-              enabled = !isBusy,
-              modifier = Modifier.weight(1f).testTag("cancel_booking_${booking.id}"),
+        Booking.STATUS_REQUESTED ->
+          if (Booking.STATUS_ESCROW_HELD in allowed) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-              Text("Cancel")
+              OutlinedButton(
+                onClick = onRequestCancel,
+                enabled = !isBusy,
+                modifier = Modifier.weight(1f).testTag("cancel_booking_${booking.id}"),
+              ) {
+                Text("Decline", maxLines = 1)
+              }
+              Button(
+                onClick = { onAdvance(Booking.STATUS_ESCROW_HELD) },
+                enabled = !isBusy,
+                modifier = Modifier.weight(1.4f).testTag("lock_escrow_${booking.id}"),
+              ) {
+                Text("Approve & Lock", maxLines = 1)
+              }
             }
-            Button(
-              onClick = { onAdvanceWithNote(Booking.STATUS_ESCROW_HELD) },
-              enabled = !isBusy,
-              modifier = Modifier.weight(1f).testTag("lock_escrow_${booking.id}"),
-            ) {
-              Text("Lock Escrow")
-            }
-          }
-        }
-        Booking.STATUS_ESCROW_HELD -> {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            OutlinedButton(
-              onClick = onRequestCancel,
-              enabled = !isBusy,
-              modifier = Modifier.weight(1f),
-            ) {
-              Text("Refund")
-            }
-            Button(
-              onClick = { onAdvanceWithNote(Booking.STATUS_IN_PROGRESS) },
-              enabled = !isBusy,
-              modifier = Modifier.weight(1f).testTag("start_handoff_${booking.id}"),
-            ) {
-              Text("Start Handoff")
-            }
-          }
-        }
-        Booking.STATUS_IN_PROGRESS -> {
-          Button(
-            onClick = { onAdvanceWithNote(Booking.STATUS_COMPLETED) },
-            enabled = !isBusy,
-            modifier = Modifier.fillMaxWidth().testTag("complete_escrow_${booking.id}"),
-            colors = ButtonDefaults.buttonColors(containerColor = EscrowSage),
-          ) {
-            Icon(
-              imageVector = Icons.Filled.CheckCircle,
-              contentDescription = null,
-              modifier = Modifier.size(18.dp),
+          } else {
+            WaitingNote(
+              text = "Waiting for $ownerName to approve your request.",
+              modifier = Modifier.testTag("booking_waiting_${booking.id}"),
             )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Confirm Return & Release Payout")
+            OutlinedButton(
+              onClick = onRequestCancel,
+              enabled = !isBusy,
+              modifier = Modifier.fillMaxWidth().testTag("cancel_booking_${booking.id}"),
+            ) {
+              Text("Cancel Request")
+            }
           }
-        }
+        Booking.STATUS_ESCROW_HELD ->
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            OutlinedButton(
+              onClick = onRequestCancel,
+              enabled = !isBusy,
+              modifier = Modifier.weight(1f).testTag("refund_booking_${booking.id}"),
+            ) {
+              Text("Refund", maxLines = 1)
+            }
+            Button(
+              onClick = { onAdvance(Booking.STATUS_IN_PROGRESS) },
+              enabled = !isBusy,
+              modifier = Modifier.weight(1.4f).testTag("start_handoff_${booking.id}"),
+            ) {
+              Text("Start Handoff", maxLines = 1)
+            }
+          }
+        Booking.STATUS_IN_PROGRESS ->
+          if (Booking.STATUS_COMPLETED in allowed) {
+            Button(
+              onClick = { onAdvance(Booking.STATUS_COMPLETED) },
+              enabled = !isBusy,
+              modifier = Modifier.fillMaxWidth().testTag("complete_escrow_${booking.id}"),
+              colors =
+                ButtonDefaults.buttonColors(
+                  containerColor = brand.escrow,
+                  contentColor = MaterialTheme.colorScheme.surface,
+                ),
+            ) {
+              Icon(
+                imageVector = Icons.Filled.CheckCircle,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+              )
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(
+                if (booking.isMicroJob) {
+                  "Confirm Job Done & Release Payout"
+                } else {
+                  "Confirm Return & Release Payout"
+                }
+              )
+            }
+          } else {
+            WaitingNote(
+              text =
+                if (booking.isMicroJob) {
+                  "$ownerName confirms the finished job, which releases your payout."
+                } else {
+                  "Return the tool to $ownerName. They confirm the return, which releases your deposit."
+                },
+              modifier = Modifier.testTag("booking_waiting_${booking.id}"),
+            )
+          }
       }
     }
+  }
+}
+
+@Composable
+private fun WaitingNote(text: String, modifier: Modifier = Modifier) {
+  Row(
+    modifier = modifier.fillMaxWidth(),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    Icon(
+      imageVector = Icons.Filled.HourglassTop,
+      contentDescription = null,
+      tint = MaterialTheme.colorScheme.onSurfaceVariant,
+      modifier = Modifier.size(16.dp),
+    )
+    Text(
+      text = text,
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
   }
 }

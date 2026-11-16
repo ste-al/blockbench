@@ -1,5 +1,6 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
 import java.time.Duration
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 
 plugins {
   alias(libs.plugins.android.application)
@@ -71,6 +72,14 @@ android {
   }
 }
 
+// The repo-root debug.keystore used by the "debugConfig" signing config above is provided by
+// AI Studio and is git-ignored, so it does not exist in a plain checkout (local development, CI).
+// Without it every debug build fails at `validateSigningDebug`. Fall back to the standard Android
+// debug keystore in that case; when the file is present nothing changes.
+if (!rootProject.file("debug.keystore").exists()) {
+  android.buildTypes.getByName("debug").signingConfig = android.signingConfigs.getByName("debug")
+}
+
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
 // to match the convention used in Web projects.
 secrets {
@@ -97,6 +106,7 @@ dependencies {
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
+  implementation(libs.androidx.exifinterface)
   // implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -104,7 +114,7 @@ dependencies {
   implementation(libs.androidx.navigation.compose)
   // implementation(libs.androidx.room.ktx)
   // implementation(libs.androidx.room.runtime)
-  implementation(libs.coil.compose)
+  // implementation(libs.coil.compose)
   // implementation(libs.converter.moshi)
   // implementation(libs.firebase.ai)
   implementation(libs.firebase.firestore)
@@ -116,6 +126,8 @@ dependencies {
   // implementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
+  // Task.await() is used directly by the data and auth layers; do not rely on Firebase to leak it.
+  implementation(libs.kotlinx.coroutines.play.services)
   // implementation(libs.logging.interceptor)
   // implementation(libs.moshi.kotlin)
   // implementation(libs.okhttp)
@@ -139,7 +151,16 @@ dependencies {
 }
 
 tasks.withType<Test> {
-  failFast = true
-  timeout.set(Duration.ofMinutes(2))
-  testLogging { events("passed", "failed", "skipped") }
+  // Generous: the first run also downloads Robolectric's Android runtime.
+  timeout.set(Duration.ofMinutes(10))
+  testLogging {
+    events("passed", "failed", "skipped")
+    exceptionFormat = TestExceptionFormat.FULL
+  }
+  // The repository tests need the Firebase emulators and skip themselves when those are not
+  // running, so the outcome depends on something Gradle cannot see. Never reuse an earlier
+  // result: a run without emulators (everything skipped) must not be served from the build
+  // cache to a later run with them.
+  outputs.upToDateWhen { false }
+  outputs.cacheIf { false }
 }

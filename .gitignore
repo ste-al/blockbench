@@ -18,3 +18,11 @@ local.properties
 debug.keystore
 *-debug.log
 
+
+# Firebase project config is environment specific and is not checked in.
+# Download yours from the Firebase console into app/ (see README).
+google-services.json
+
+# Node tooling for the Firestore rules tests and the Firebase emulators
+node_modules/
+.firebase/

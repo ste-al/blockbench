@@ -49,15 +49,18 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
 import com.example.R
-import com.example.auth.attemptAutoSignIn
-import com.example.auth.onGoogleSignInClicked
+import com.example.auth.GoogleSignInResult
+import com.example.auth.signInWithGoogle
+import com.example.auth.trySilentGoogleSignIn
 import com.example.ui.components.CraftCard
+import kotlinx.coroutines.launch
 
+/**
+ * Signed-out landing screen. A successful sign-in is not reported through a callback: the root
+ * composable observes the Firebase auth state and swaps this screen out by itself.
+ */
 @Composable
-fun AuthScreen(
-  onAuthSuccess: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
+fun AuthScreen(modifier: Modifier = Modifier) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
   val credentialManager = remember(context) { CredentialManager.create(context) }
@@ -65,15 +68,7 @@ fun AuthScreen(
   var isSigningIn by remember { mutableStateOf(false) }
   var errorMessage by remember { mutableStateOf<String?>(null) }
 
-  LaunchedEffect(Unit) {
-    attemptAutoSignIn(
-      context = context,
-      credentialManager = credentialManager,
-      onAuthSuccess = onAuthSuccess,
-      onUnauthenticated = {},
-      scope = scope,
-    )
-  }
+  LaunchedEffect(credentialManager) { trySilentGoogleSignIn(context, credentialManager) }
 
   Box(
     modifier = modifier.fillMaxSize().safeDrawingPadding(),
@@ -162,20 +157,14 @@ fun AuthScreen(
         onClick = {
           errorMessage = null
           isSigningIn = true
-          onGoogleSignInClicked(
-            context = context,
-            credentialManager = credentialManager,
-            onAuthSuccess = {
+          scope.launch {
+            try {
+              val result = signInWithGoogle(context, credentialManager)
+              if (result is GoogleSignInResult.Failure) errorMessage = result.message
+            } finally {
               isSigningIn = false
-              onAuthSuccess()
-            },
-            onAuthError = { msg ->
-              isSigningIn = false
-              errorMessage = msg
-            },
-            scope = scope,
-            onAuthCancelled = { isSigningIn = false },
-          )
+            }
+          }
         },
         enabled = !isSigningIn,
         modifier =

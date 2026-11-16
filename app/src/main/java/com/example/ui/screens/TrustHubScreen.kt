@@ -27,7 +27,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -43,35 +42,40 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.model.BlockCircle
-import com.example.model.Booking
+import com.example.model.BookingTotals
 import com.example.model.CraftCategories
+import com.example.model.EscrowFeeBreakdown
 import com.example.model.Listing
 import com.example.model.UserProfile
+import com.example.ui.components.BlockRadiusSlider
 import com.example.ui.components.CraftCard
 import com.example.ui.components.LedgerRow
 import com.example.ui.components.NeighborTrustCardView
 import com.example.ui.components.copyInviteCodeToClipboard
 import com.example.ui.components.formatCents
+import com.example.ui.components.formatMiles
 import com.example.ui.components.shareNeighborhoodInvite
 import com.example.ui.components.shareTrustCard
-import com.example.ui.theme.EscrowSage
-import com.example.ui.theme.MonoFigureStyle
-import com.example.ui.theme.ProAmber
-import com.example.ui.theme.ProAmberSoft
-import java.util.Locale
+import com.example.ui.theme.blockBenchColors
 import kotlin.math.abs
 
+/**
+ * Trust Card, earnings ledger, Pro Alert rules and account controls.
+ *
+ * [totals] are the figures derived from the user's completed bookings; they are what the card and
+ * the ledger show, so both always agree with the Escrow tab.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TrustHubScreen(
-  currentUserId: String,
   profile: UserProfile,
+  totals: BookingTotals,
   activeCircle: BlockCircle,
   circlesCount: Int,
-  bookings: List<Booking>,
   proAlertMatches: List<Listing>,
   isBusy: Boolean,
   onSaveProAlerts: (enabled: Boolean, radiusMiles: Double, categories: List<String>) -> Unit,
@@ -82,55 +86,32 @@ fun TrustHubScreen(
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
+  val brand = blockBenchColors
+
+  // Local edits; re-seeded whenever the saved value changes.
   var proEnabled by remember(profile.proAlertsEnabled) { mutableStateOf(profile.proAlertsEnabled) }
-  var alertRadius by remember(profile.alertRadiusMiles) { mutableDoubleStateOf(profile.alertRadiusMiles) }
+  var alertRadius by
+    remember(profile.alertRadiusMiles) { mutableDoubleStateOf(profile.alertRadiusMiles) }
   var alertCats by remember(profile.alertCategories) { mutableStateOf(profile.alertCategories) }
 
-  val completedBookings = remember(bookings) { bookings.filter { it.status == Booking.STATUS_COMPLETED } }
-  val liveEarnedCents =
-    remember(completedBookings, currentUserId, profile.totalEarnedCents) {
-      maxOf(
-        profile.totalEarnedCents,
-        completedBookings.filter { it.providerUid == currentUserId }.sumOf { it.providerNetCents },
-      )
-    }
-  val liveFeesCents =
-    remember(completedBookings, profile.totalFeesSavedOrPaidCents) {
-      maxOf(
-        profile.totalFeesSavedOrPaidCents,
-        completedBookings.sumOf { it.platformFeeCents },
-      )
-    }
-  val liveHandoffs =
-    remember(completedBookings, profile.completedHandoffs) {
-      maxOf(profile.completedHandoffs, completedBookings.size.toLong())
-    }
-  val displayProfile =
-    remember(profile, liveEarnedCents, liveFeesCents, liveHandoffs) {
-      profile.copy(
-        completedHandoffs = liveHandoffs,
-        onTimeReturns = maxOf(profile.onTimeReturns, liveHandoffs),
-        totalEarnedCents = liveEarnedCents,
-        totalFeesSavedOrPaidCents = liveFeesCents,
-      )
-    }
-
-  val hasUnsavedProChanges =
-    proEnabled != profile.proAlertsEnabled ||
-      abs(alertRadius - profile.alertRadiusMiles) > 0.05 ||
+  val hasUnsavedRuleChanges =
+    abs(alertRadius - profile.alertRadiusMiles) > 0.05 ||
       alertCats.toSet() != profile.alertCategories.toSet()
 
   LazyColumn(
     modifier = modifier.fillMaxSize(),
-    contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 96.dp),
+    contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 96.dp),
     verticalArrangement = Arrangement.spacedBy(16.dp),
   ) {
     item {
       NeighborTrustCardView(
-        profile = displayProfile,
+        profile = profile,
+        totals = totals,
         circleName = activeCircle.name,
         inviteCode = activeCircle.inviteCode,
-        onShareTrustCard = { shareTrustCard(context, displayProfile, activeCircle.name) },
+        onShareTrustCard = {
+          shareTrustCard(context, profile, totals, activeCircle.name, activeCircle.inviteCode)
+        },
         onOneTapInvite = {
           shareNeighborhoodInvite(context, activeCircle.name, activeCircle.inviteCode)
         },
@@ -153,17 +134,17 @@ fun TrustHubScreen(
           )
           LedgerRow(
             label = "Net Passive Earnings",
-            value = formatCents(liveEarnedCents),
+            value = formatCents(totals.earnedCents),
             bold = true,
-            valueColor = EscrowSage,
+            valueColor = brand.escrow,
           )
           LedgerRow(
-            label = "5% Escrow Platform Fees",
-            value = formatCents(liveFeesCents),
+            label = "${EscrowFeeBreakdown.PLATFORM_FEE_PERCENT}% Escrow Platform Fees",
+            value = formatCents(totals.feesCents),
           )
           LedgerRow(
             label = "Completed Block Handoffs",
-            value = liveHandoffs.toString(),
+            value = totals.completedHandoffs.toString(),
           )
           Text(
             text = stringResource(id = R.string.escrow_fee_note),
@@ -178,7 +159,11 @@ fun TrustHubScreen(
     item {
       CraftCard(
         containerColor =
-          if (proEnabled) ProAmberSoft.copy(alpha = 0.55f) else MaterialTheme.colorScheme.surface,
+          if (proEnabled) {
+            brand.proContainer.copy(alpha = 0.55f)
+          } else {
+            MaterialTheme.colorScheme.surface
+          },
       ) {
         Column(
           modifier = Modifier.padding(16.dp),
@@ -194,11 +179,11 @@ fun TrustHubScreen(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-              Surface(color = ProAmberSoft, shape = RoundedCornerShape(10.dp)) {
+              Surface(color = brand.proContainer, shape = RoundedCornerShape(10.dp)) {
                 Icon(
                   imageVector = Icons.Filled.NotificationsActive,
-                  contentDescription = "Pro Alerts",
-                  tint = ProAmber,
+                  contentDescription = null,
+                  tint = brand.onProContainer,
                   modifier = Modifier.padding(8.dp).size(22.dp),
                 )
               }
@@ -210,7 +195,7 @@ fun TrustHubScreen(
                 Text(
                   text = stringResource(id = R.string.pro_alerts_price),
                   style = MaterialTheme.typography.bodySmall,
-                  color = ProAmber,
+                  color = brand.onProContainer,
                 )
               }
             }
@@ -220,38 +205,28 @@ fun TrustHubScreen(
                 proEnabled = checked
                 onSaveProAlerts(checked, alertRadius, alertCats)
               },
+              enabled = !isBusy,
               modifier = Modifier.testTag("pro_alerts_switch"),
             )
           }
 
           Text(
             text =
-              "Auto-match instant micro-jobs and tool requests in ${activeCircle.name} before general members see them. Currently matching ${proAlertMatches.size} live listings.",
+              "Auto-match instant micro-jobs and tool requests in ${activeCircle.name} before " +
+                "general members see them. Your saved rules currently match " +
+                "${proAlertMatches.size} live " +
+                if (proAlertMatches.size == 1) "listing." else "listings.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
 
-          HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+          HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-          Column {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-              Text("Alert Watch Radius", style = MaterialTheme.typography.labelLarge)
-              Text(
-                text = String.format(Locale.US, "%.1f mi", alertRadius),
-                style = MonoFigureStyle,
-                color = MaterialTheme.colorScheme.primary,
-              )
-            }
-            Slider(
-              value = alertRadius.toFloat(),
-              onValueChange = { alertRadius = it.toDouble() },
-              valueRange = 0.5f..5.0f,
-              steps = 8,
-            )
-          }
+          BlockRadiusSlider(
+            radiusMiles = alertRadius,
+            onRadiusChange = { alertRadius = it },
+            label = "Alert Watch Radius",
+          )
 
           Text("Watched Categories", style = MaterialTheme.typography.labelLarge)
           FlowRow(
@@ -262,24 +237,27 @@ fun TrustHubScreen(
               val selected = cat in alertCats
               FilterChip(
                 selected = selected,
-                onClick = {
-                  alertCats = if (selected) alertCats - cat else (alertCats + cat).take(8)
-                },
+                onClick = { alertCats = if (selected) alertCats - cat else alertCats + cat },
                 label = { Text(cat) },
               )
             }
           }
 
+          // The one button activates the subscription when it is off and saves edited rules when
+          // it is on. (It used to save "off" again while offering to "Activate".)
           Button(
-            onClick = { onSaveProAlerts(proEnabled, alertRadius, alertCats) },
-            enabled = !isBusy,
+            onClick = {
+              proEnabled = true
+              onSaveProAlerts(true, alertRadius, alertCats)
+            },
+            enabled = !isBusy && (!proEnabled || hasUnsavedRuleChanges),
             modifier = Modifier.fillMaxWidth().testTag("save_pro_alerts_button"),
           ) {
             Text(
               when {
-                hasUnsavedProChanges && proEnabled -> "Save Updated Watch Rules"
-                proEnabled -> "Pro Alert Rules Saved"
-                else -> "Activate Pro Alerts ($4.99/mo)"
+                !proEnabled -> stringResource(id = R.string.pro_alerts_activate)
+                hasUnsavedRuleChanges -> "Save Updated Watch Rules"
+                else -> "Pro Alert Rules Saved"
               }
             )
           }
@@ -297,39 +275,38 @@ fun TrustHubScreen(
       items(proAlertMatches.take(3), key = { it.id }) { listing ->
         CraftCard(
           onClick = onInspectProMatch,
-          containerColor = ProAmberSoft.copy(alpha = 0.4f),
+          containerColor = brand.proContainer.copy(alpha = 0.4f),
           modifier = Modifier.fillMaxWidth().testTag("pro_match_card_${listing.id}"),
         ) {
           Row(
             modifier = Modifier.padding(14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
           ) {
-            Row(
-              modifier = Modifier.weight(1f),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-              Icon(
-                imageVector = Icons.Filled.ElectricBolt,
-                contentDescription = null,
-                tint = ProAmber,
-                modifier = Modifier.size(20.dp),
+            Icon(
+              imageVector = Icons.Filled.ElectricBolt,
+              contentDescription = null,
+              tint = brand.onProContainer,
+              modifier = Modifier.size(20.dp),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = listing.title,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
               )
-              Column {
-                Text(text = listing.title, style = MaterialTheme.typography.titleMedium)
-                Text(
-                  text =
-                    "${listing.category} · ${String.format(Locale.US, "%.1f", listing.distanceMiles)} mi · ${formatCents(listing.rateCents)}",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
+              Text(
+                text =
+                  "${listing.category} · ${formatMiles(listing.distanceMiles)} · ${formatCents(listing.rateCents)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
             }
             Icon(
               imageVector = Icons.AutoMirrored.Filled.ArrowForward,
               contentDescription = "View match in feed",
-              tint = ProAmber,
+              tint = brand.onProContainer,
             )
           }
         }
@@ -346,7 +323,9 @@ fun TrustHubScreen(
           Text(text = "Neighborhood Block & Account", style = MaterialTheme.typography.titleMedium)
           Text(
             text =
-              "Active Circle: ${activeCircle.name} (${activeCircle.memberUids.size} neighbors · $circlesCount joined)",
+              "Active block: ${activeCircle.name} (${activeCircle.memberUids.size} neighbors). " +
+                "You belong to $circlesCount " +
+                if (circlesCount == 1) "block." else "blocks.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
