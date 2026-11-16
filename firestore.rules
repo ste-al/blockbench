@@ -1,16 +1,36 @@
 rules_version = '2';
 
+// BlockBench security rules
+//
+//   /users/{uid}            private profile, owner only
+//   /circles/{circleId}     neighbourhood block, readable by its members
+//   /circleInvites/{code}   invite code -> circle lookup, fetchable by exact code only
+//   /listings/{listingId}   tool or micro-job, readable by members of its circle
+//   /bookings/{bookingId}   escrow ledger entry, readable by its two participants
+//
+// Anything not explicitly allowed below is denied. There is no backend: these rules are the only
+// thing standing between a modified client and the data, so every write is validated in full and
+// the cross-document invariants are enforced with get()/getAfter():
+//
+//   * a circle and its invite document are created together and always agree;
+//   * a listing is `reserved` exactly while one non-terminal booking points at it
+//     (listing.activeBookingId), so it can never be double-booked or deleted mid-booking;
+//   * a booking copies its money terms and counterparty from the listing and can never change them;
+//   * only the listing owner approves a request and confirms completion.
+//
+// The client mirrors these rules in BlockBenchRepository and EscrowWorkflow. Change them together,
+// and run `npm test` (firestore.test.js) after every edit.
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Global safety net: default-deny everything unless explicitly matched below
-    match /{document=**} {
-      allow read, write: if false;
+    // ---------------------------------------------------------------- helpers
+
+    function isSignedIn() {
+      return request.auth != null;
     }
 
-    // --- Reusable Hardened Primitives ---
-    function isValidId(id) {
-      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    function uid() {
+      return request.auth.uid;
     }
 
     function incoming() {
@@ -21,21 +41,60 @@ service cloud.firestore {
       return resource.data;
     }
 
-    function isSignedIn() {
-      return request.auth != null;
+    // Keys that were added, removed or modified by an update.
+    function changedKeys() {
+      return incoming().diff(existing()).affectedKeys();
     }
 
-    function isValidTimestamp(ts) {
-      return ts is timestamp && ts <= request.time;
+    function isValidId(id) {
+      return id is string && id.matches('^[a-zA-Z0-9_\\-]{1,128}$');
     }
 
-    function isValidBoundedStringArray(arr, maxLen) {
-      return arr is list && arr.size() <= maxLen && (arr.size() == 0 || arr[0] is string);
+    function isValidUid(value) {
+      return value is string && value.size() >= 1 && value.size() <= 128;
     }
 
-    // --- Validation Blueprints ---
+    // True only for FieldValue.serverTimestamp(): clients cannot back- or forward-date records.
+    function isServerTime(value) {
+      return value == request.time;
+    }
+
+    function circlePath(circleId) {
+      return /databases/$(database)/documents/circles/$(circleId);
+    }
+
+    function invitePath(inviteCode) {
+      return /databases/$(database)/documents/circleInvites/$(inviteCode);
+    }
+
+    function listingPath(listingId) {
+      return /databases/$(database)/documents/listings/$(listingId);
+    }
+
+    function bookingPath(bookingId) {
+      return /databases/$(database)/documents/bookings/$(bookingId);
+    }
+
+    function isCircleMember(circleId) {
+      return exists(circlePath(circleId)) && uid() in get(circlePath(circleId)).data.memberUids;
+    }
+
+    // ------------------------------------------------------------------ users
+    // Owner-only. The trust and earnings figures are a private, client-maintained summary of the
+    // user's own bookings; nobody else can read this document, and the booking ledger below stays
+    // the source of truth.
+
+    function userProfileFields() {
+      return [
+        'uid', 'displayName', 'neighborhoodLabel', 'activeCircleId', 'activeCircleName',
+        'activeInviteCode', 'trustScore', 'completedHandoffs', 'onTimeReturns',
+        'totalEarnedCents', 'totalFeesSavedOrPaidCents', 'proAlertsEnabled',
+        'alertRadiusMiles', 'alertCategories', 'createdAt', 'updatedAt'
+      ];
+    }
+
     function isValidUserProfile(data) {
-      return data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+      return isValidUid(data.uid) &&
              data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
              data.neighborhoodLabel is string && data.neighborhoodLabel.size() <= 80 &&
              data.activeCircleId is string && data.activeCircleId.size() <= 128 &&
@@ -48,54 +107,273 @@ service cloud.firestore {
              data.totalFeesSavedOrPaidCents is int && data.totalFeesSavedOrPaidCents >= 0 && data.totalFeesSavedOrPaidCents <= 1000000000 &&
              data.proAlertsEnabled is bool &&
              data.alertRadiusMiles is number && data.alertRadiusMiles >= 0.25 && data.alertRadiusMiles <= 10.0 &&
-             isValidBoundedStringArray(data.alertCategories, 8);
+             data.alertCategories is list && data.alertCategories.size() <= 8 &&
+             (data.alertCategories.size() == 0 || data.alertCategories[0] is string);
     }
 
+    match /users/{userId} {
+      allow get: if isSignedIn() && uid() == userId;
+
+      allow create: if isSignedIn() &&
+                       uid() == userId &&
+                       incoming().keys().hasAll(userProfileFields()) &&
+                       incoming().keys().hasOnly(userProfileFields()) &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().uid == userId &&
+                       isServerTime(incoming().createdAt) &&
+                       isServerTime(incoming().updatedAt);
+
+      allow update: if isSignedIn() &&
+                       uid() == userId &&
+                       isValidUserProfile(incoming()) &&
+                       isServerTime(incoming().updatedAt) &&
+                       // uid and createdAt are deliberately absent: they never change.
+                       changedKeys().hasOnly([
+                         'displayName', 'neighborhoodLabel', 'activeCircleId', 'activeCircleName',
+                         'activeInviteCode', 'trustScore', 'completedHandoffs', 'onTimeReturns',
+                         'totalEarnedCents', 'totalFeesSavedOrPaidCents', 'proAlertsEnabled',
+                         'alertRadiusMiles', 'alertCategories', 'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() && uid() == userId;
+    }
+
+    // ---------------------------------------------------------------- circles
+
+    function circleFields() {
+      return ['creatorUid', 'name', 'inviteCode', 'radiusMiles', 'memberUids', 'createdAt', 'updatedAt'];
+    }
+
+    // memberUids only ever holds auth uids: it starts as [creator] and afterwards changes solely
+    // through the "add myself" / "remove myself" updates below.
     function isValidCircle(data) {
-      return data.creatorUid is string && data.creatorUid.size() >= 1 && data.creatorUid.size() <= 128 &&
+      return isValidUid(data.creatorUid) &&
              data.name is string && data.name.size() >= 2 && data.name.size() <= 60 &&
-             data.inviteCode is string && data.inviteCode.size() >= 4 && data.inviteCode.size() <= 12 &&
-             data.inviteCode.matches('^[A-Z0-9]+$') &&
+             data.inviteCode is string && data.inviteCode.matches('^[A-Z0-9]{4,12}$') &&
              data.radiusMiles is number && data.radiusMiles >= 0.25 && data.radiusMiles <= 10.0 &&
-             data.memberUids is list && data.memberUids.size() >= 1 && data.memberUids.size() <= 50 &&
-             data.memberUids[0] is string;
+             data.memberUids is list && data.memberUids.size() >= 1 && data.memberUids.size() <= 50;
+    }
+
+    match /circles/{circleId} {
+      // The same condition serves single reads and the "circles I belong to" query.
+      allow read: if isSignedIn() && uid() in existing().memberUids;
+
+      // A circle is always created together with its invite document (same batch/transaction),
+      // so it can neither be left without a working code nor claim a code that belongs to
+      // another circle.
+      allow create: if isSignedIn() &&
+                       isValidId(circleId) &&
+                       incoming().keys().hasAll(circleFields()) &&
+                       incoming().keys().hasOnly(circleFields()) &&
+                       isValidCircle(incoming()) &&
+                       incoming().creatorUid == uid() &&
+                       incoming().memberUids == [uid()] &&
+                       isServerTime(incoming().createdAt) &&
+                       isServerTime(incoming().updatedAt) &&
+                       !exists(invitePath(incoming().inviteCode)) &&
+                       existsAfter(invitePath(incoming().inviteCode)) &&
+                       getAfter(invitePath(incoming().inviteCode)).data.circleId == circleId;
+
+      allow update: if isSignedIn() &&
+                       isValidCircle(incoming()) &&
+                       isServerTime(incoming().updatedAt) &&
+                       (
+                         // The creator renames the block or changes its radius.
+                         (
+                           uid() == existing().creatorUid &&
+                           changedKeys().hasOnly(['name', 'radiusMiles', 'updatedAt'])
+                         ) ||
+                         // A neighbour joins: appends exactly their own uid.
+                         (
+                           changedKeys().hasOnly(['memberUids', 'updatedAt']) &&
+                           !(uid() in existing().memberUids) &&
+                           incoming().memberUids == existing().memberUids.concat([uid()])
+                         ) ||
+                         // A member other than the creator leaves: removes exactly their own uid.
+                         (
+                           changedKeys().hasOnly(['memberUids', 'updatedAt']) &&
+                           uid() != existing().creatorUid &&
+                           uid() in existing().memberUids &&
+                           incoming().memberUids == existing().memberUids.removeAll([uid()])
+                         )
+                       );
+
+      allow delete: if isSignedIn() && uid() == existing().creatorUid;
+    }
+
+    // ---------------------------------------------------------- circleInvites
+    // Lookup documents keyed by invite code. Readable by exact code only (never listable), which
+    // is what makes the code the secret a neighbour needs in order to find a circle.
+
+    function inviteFields() {
+      return ['inviteCode', 'circleId', 'circleName', 'creatorUid', 'createdAt'];
     }
 
     function isValidCircleInvite(data) {
-      return data.inviteCode is string && data.inviteCode.size() >= 4 && data.inviteCode.size() <= 12 &&
-             data.inviteCode.matches('^[A-Z0-9]+$') &&
-             data.circleId is string && isValidId(data.circleId) &&
+      return data.inviteCode is string && data.inviteCode.matches('^[A-Z0-9]{4,12}$') &&
+             isValidId(data.circleId) &&
              data.circleName is string && data.circleName.size() >= 2 && data.circleName.size() <= 60 &&
-             data.creatorUid is string && data.creatorUid.size() >= 1 && data.creatorUid.size() <= 128;
+             isValidUid(data.creatorUid);
+    }
+
+    match /circleInvites/{inviteCode} {
+      allow get: if isSignedIn();
+
+      // Only the circle's creator, only for the code stored on the circle, and (because updates
+      // are denied) only while the code is still unused.
+      allow create: if isSignedIn() &&
+                       incoming().keys().hasAll(inviteFields()) &&
+                       incoming().keys().hasOnly(inviteFields()) &&
+                       isValidCircleInvite(incoming()) &&
+                       incoming().inviteCode == inviteCode &&
+                       incoming().creatorUid == uid() &&
+                       isServerTime(incoming().createdAt) &&
+                       existsAfter(circlePath(incoming().circleId)) &&
+                       getAfter(circlePath(incoming().circleId)).data.creatorUid == uid() &&
+                       getAfter(circlePath(incoming().circleId)).data.inviteCode == inviteCode &&
+                       getAfter(circlePath(incoming().circleId)).data.name == incoming().circleName;
+
+      // An invite lives as long as its circle.
+      allow delete: if isSignedIn() &&
+                       existing().creatorUid == uid() &&
+                       !existsAfter(circlePath(existing().circleId));
+    }
+
+    // --------------------------------------------------------------- listings
+    // Visibility follows live circle membership (looked up on the circle document), so a new
+    // member sees the feed immediately and a member who leaves loses it immediately. Queries must
+    // filter on `circleId ==` for the list rule to be provable.
+
+    function listingFields() {
+      return [
+        'circleId', 'ownerUid', 'ownerName', 'ownerTrustScore', 'kind', 'title', 'description',
+        'category', 'rateCents', 'depositCents', 'distanceMiles', 'instantPickup', 'photoUri',
+        'status', 'activeBookingId', 'createdAt', 'updatedAt'
+      ];
     }
 
     function isValidListing(data) {
-      return data.circleId is string && isValidId(data.circleId) &&
-             data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+      return isValidId(data.circleId) &&
+             isValidUid(data.ownerUid) &&
              data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 60 &&
              data.ownerTrustScore is number && data.ownerTrustScore >= 0.0 && data.ownerTrustScore <= 5.0 &&
-             data.memberUids is list && data.memberUids.size() >= 1 && data.memberUids.size() <= 50 &&
-             data.memberUids[0] is string &&
              data.kind in ['tool', 'micro_job'] &&
              data.title is string && data.title.size() >= 3 && data.title.size() <= 80 &&
              data.description is string && data.description.size() <= 400 &&
              data.category is string && data.category.size() >= 2 && data.category.size() <= 40 &&
              data.rateCents is int && data.rateCents >= 100 && data.rateCents <= 500000 &&
              data.depositCents is int && data.depositCents >= 0 && data.depositCents <= 500000 &&
+             // Micro-jobs have no deposit; the UI never shows one for them.
+             (data.kind == 'tool' || data.depositCents == 0) &&
              data.distanceMiles is number && data.distanceMiles >= 0.05 && data.distanceMiles <= 10.0 &&
              data.instantPickup is bool &&
-             data.photoUri is string && data.photoUri.size() <= 500 &&
-             data.status in ['available', 'reserved', 'paused'];
+             data.photoUri is string &&
+             data.status in ['available', 'reserved', 'paused'] &&
+             // Absent on listings written before reservations were tracked.
+             data.get('activeBookingId', '') is string;
+    }
+
+    // Photos are small JPEG thumbnails stored inline as a data URI. Arbitrary URLs are refused:
+    // neighbours' devices would fetch them, which leaks their IP address to whoever posted.
+    function isValidPhoto(value) {
+      return value == '' ||
+             (value.size() <= 60000 && value.matches('^data:image/jpeg;base64,[A-Za-z0-9+/]+={0,2}$'));
+    }
+
+    match /listings/{listingId} {
+      // Asking for a listing that does not exist (any more) is answered with "not found" rather
+      // than "permission denied", so the app can tell a neighbour "this was just removed".
+      allow get: if isSignedIn() && (resource == null || isCircleMember(existing().circleId));
+      allow list: if isSignedIn() && isCircleMember(existing().circleId);
+
+      allow create: if isSignedIn() &&
+                       isValidId(listingId) &&
+                       incoming().keys().hasAll(listingFields()) &&
+                       incoming().keys().hasOnly(listingFields()) &&
+                       isValidListing(incoming()) &&
+                       isValidPhoto(incoming().photoUri) &&
+                       incoming().ownerUid == uid() &&
+                       incoming().status == 'available' &&
+                       incoming().activeBookingId == '' &&
+                       isServerTime(incoming().createdAt) &&
+                       isServerTime(incoming().updatedAt) &&
+                       isCircleMember(incoming().circleId);
+
+      allow update: if isSignedIn() &&
+                       isValidListing(incoming()) &&
+                       isServerTime(incoming().updatedAt) &&
+                       (
+                         // 1. The owner edits details, or pauses / resumes. The reservation itself
+                         //    (status `reserved`, activeBookingId) is not theirs to edit.
+                         (
+                           uid() == existing().ownerUid &&
+                           changedKeys().hasOnly([
+                             'ownerName', 'ownerTrustScore', 'title', 'description', 'category',
+                             'rateCents', 'depositCents', 'distanceMiles', 'instantPickup',
+                             'photoUri', 'status', 'updatedAt'
+                           ]) &&
+                           (incoming().photoUri == existing().photoUri || isValidPhoto(incoming().photoUri)) &&
+                           (
+                             incoming().status == existing().status ||
+                             (existing().status in ['available', 'paused'] && incoming().status in ['available', 'paused']) ||
+                             // Listings reserved before activeBookingId existed have nothing that
+                             // could release them; let their owner make them available again.
+                             (existing().status == 'reserved' && existing().get('activeBookingId', '') == '' && incoming().status == 'available')
+                           )
+                         ) ||
+                         // 2. A neighbour reserves the listing by creating a booking for it in the
+                         //    same write. The booking's own create rule validates everything else.
+                         (
+                           existing().status == 'available' &&
+                           incoming().status == 'reserved' &&
+                           changedKeys().hasOnly(['status', 'activeBookingId', 'updatedAt']) &&
+                           isValidId(incoming().activeBookingId) &&
+                           !exists(bookingPath(incoming().activeBookingId)) &&
+                           existsAfter(bookingPath(incoming().activeBookingId)) &&
+                           getAfter(bookingPath(incoming().activeBookingId)).data.listingId == listingId &&
+                           getAfter(bookingPath(incoming().activeBookingId)).data.status == 'requested'
+                         ) ||
+                         // 3. A participant releases the listing once its booking is completed or
+                         //    cancelled (normally in the same write as that transition).
+                         (
+                           existing().status == 'reserved' &&
+                           incoming().status == 'available' &&
+                           incoming().activeBookingId == '' &&
+                           changedKeys().hasOnly(['status', 'activeBookingId', 'updatedAt']) &&
+                           existing().get('activeBookingId', '') != '' &&
+                           uid() in getAfter(bookingPath(existing().activeBookingId)).data.participantUids &&
+                           getAfter(bookingPath(existing().activeBookingId)).data.listingId == listingId &&
+                           getAfter(bookingPath(existing().activeBookingId)).data.status in ['completed', 'cancelled']
+                         )
+                       );
+
+      // A listing with a booking in flight has to stay until that booking is settled.
+      allow delete: if isSignedIn() &&
+                       uid() == existing().ownerUid &&
+                       existing().status != 'reserved';
+    }
+
+    // --------------------------------------------------------------- bookings
+    // The escrow ledger. Entries are created by the neighbour who books a tool or claims a job,
+    // move through requested -> escrow_held -> in_progress -> completed (or -> cancelled before
+    // the handoff), and are never deleted.
+
+    function bookingFields() {
+      return [
+        'listingId', 'listingTitle', 'listingKind', 'circleId', 'requesterUid', 'requesterName',
+        'providerUid', 'providerName', 'participantUids', 'grossAmountCents', 'depositCents',
+        'platformFeeCents', 'providerNetCents', 'status', 'notes', 'createdAt', 'updatedAt'
+      ];
     }
 
     function isValidBooking(data) {
-      return data.listingId is string && isValidId(data.listingId) &&
+      return isValidId(data.listingId) &&
              data.listingTitle is string && data.listingTitle.size() >= 1 && data.listingTitle.size() <= 80 &&
              data.listingKind in ['tool', 'micro_job'] &&
-             data.circleId is string && isValidId(data.circleId) &&
-             data.requesterUid is string && data.requesterUid.size() >= 1 && data.requesterUid.size() <= 128 &&
+             isValidId(data.circleId) &&
+             isValidUid(data.requesterUid) &&
              data.requesterName is string && data.requesterName.size() >= 1 && data.requesterName.size() <= 60 &&
-             data.providerUid is string && data.providerUid.size() >= 1 && data.providerUid.size() <= 128 &&
+             isValidUid(data.providerUid) &&
              data.providerName is string && data.providerName.size() >= 1 && data.providerName.size() <= 60 &&
              data.requesterUid != data.providerUid &&
              data.participantUids is list && data.participantUids.size() == 2 &&
@@ -109,266 +387,109 @@ service cloud.firestore {
              data.notes is string && data.notes.size() <= 250;
     }
 
-    // --- Collection 1: /users/{userId} (Strictly Owner-Isolated) ---
-    match /users/{userId} {
-      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
-      allow list: if isSignedIn() && request.auth.uid == userId;
-
-      allow create: if isSignedIn() &&
-                       isValidId(userId) &&
-                       request.auth.uid == userId &&
-                       incoming().uid == request.auth.uid &&
-                       incoming().keys().hasAll([
-                         'uid', 'displayName', 'neighborhoodLabel', 'activeCircleId',
-                         'activeCircleName', 'activeInviteCode', 'trustScore',
-                         'completedHandoffs', 'onTimeReturns', 'totalEarnedCents',
-                         'totalFeesSavedOrPaidCents', 'proAlertsEnabled',
-                         'alertRadiusMiles', 'alertCategories', 'createdAt', 'updatedAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'uid', 'displayName', 'neighborhoodLabel', 'activeCircleId',
-                         'activeCircleName', 'activeInviteCode', 'trustScore',
-                         'completedHandoffs', 'onTimeReturns', 'totalEarnedCents',
-                         'totalFeesSavedOrPaidCents', 'proAlertsEnabled',
-                         'alertRadiusMiles', 'alertCategories', 'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidTimestamp(incoming().createdAt) &&
-                       isValidTimestamp(incoming().updatedAt) &&
-                       isValidUserProfile(incoming());
-
-      allow update: if isSignedIn() &&
-                       isValidId(userId) &&
-                       request.auth.uid == userId &&
-                       isValidUserProfile(incoming()) &&
-                       incoming().uid == existing().uid &&
-                       incoming().createdAt == existing().createdAt &&
-                       isValidTimestamp(incoming().updatedAt) &&
-                       incoming().diff(existing()).affectedKeys().hasOnly([
-                         'displayName', 'neighborhoodLabel', 'activeCircleId',
-                         'activeCircleName', 'activeInviteCode', 'trustScore',
-                         'completedHandoffs', 'onTimeReturns', 'totalEarnedCents',
-                         'totalFeesSavedOrPaidCents', 'proAlertsEnabled',
-                         'alertRadiusMiles', 'alertCategories', 'updatedAt'
-                       ]);
-
-      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+    // 5% of the rate, rounded half up, in integer cents. Keep in sync with
+    // EscrowFeeBreakdown.calculate() in the app.
+    function platformFeeFor(grossCents) {
+      return int((grossCents * 5 + 50) / 100);
     }
 
-    // --- Collection 2: /circles/{circleId} (Block Members Only) ---
-    match /circles/{circleId} {
-      allow get: if isSignedIn() && isValidId(circleId) && request.auth.uid in existing().memberUids;
-      allow list: if isSignedIn() && request.auth.uid in existing().memberUids;
-
-      allow create: if isSignedIn() &&
-                       isValidId(circleId) &&
-                       incoming().creatorUid == request.auth.uid &&
-                       incoming().memberUids.size() == 1 &&
-                       request.auth.uid in incoming().memberUids &&
-                       incoming().keys().hasAll([
-                         'creatorUid', 'name', 'inviteCode', 'radiusMiles',
-                         'memberUids', 'createdAt', 'updatedAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'creatorUid', 'name', 'inviteCode', 'radiusMiles',
-                         'memberUids', 'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidTimestamp(incoming().createdAt) &&
-                       isValidTimestamp(incoming().updatedAt) &&
-                       isValidCircle(incoming());
-
-      allow update: if isSignedIn() &&
-                       isValidId(circleId) &&
-                       isValidCircle(incoming()) &&
-                       incoming().creatorUid == existing().creatorUid &&
-                       incoming().inviteCode == existing().inviteCode &&
-                       incoming().createdAt == existing().createdAt &&
-                       isValidTimestamp(incoming().updatedAt) &&
-                       (
-                         // Action 1: Creator updates circle metadata
-                         (
-                           request.auth.uid == existing().creatorUid &&
-                           incoming().memberUids == existing().memberUids &&
-                           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'radiusMiles', 'updatedAt'])
-                         ) ||
-                         // Action 2: New neighbor joins circle (additive membership only)
-                         (
-                           !(request.auth.uid in existing().memberUids) &&
-                           request.auth.uid in incoming().memberUids &&
-                           incoming().memberUids.hasAll(existing().memberUids) &&
-                           incoming().memberUids.size() == existing().memberUids.size() + 1 &&
-                           incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt'])
-                         ) ||
-                         // Action 3: Non-creator member leaves circle
-                         (
-                           request.auth.uid in existing().memberUids &&
-                           request.auth.uid != existing().creatorUid &&
-                           !(request.auth.uid in incoming().memberUids) &&
-                           existing().memberUids.hasAll(incoming().memberUids) &&
-                           incoming().memberUids.size() == existing().memberUids.size() - 1 &&
-                           incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt'])
-                         )
-                       );
-
-      allow delete: if isSignedIn() && isValidId(circleId) && existing().creatorUid == request.auth.uid;
+    // The neighbour who posted the listing: the lender of a tool, or the poster of a micro-job.
+    function listingOwnerOf(booking) {
+      return booking.listingKind == 'tool' ? booking.providerUid : booking.requesterUid;
     }
 
-    // --- Collection 3: /circleInvites/{inviteCode} (Exact-Code Get Only, Never Listable) ---
-    match /circleInvites/{inviteCode} {
-      allow get: if isSignedIn() && isValidId(inviteCode);
-      allow list: if false;
-
-      allow create: if isSignedIn() &&
-                       isValidId(inviteCode) &&
-                       incoming().inviteCode == inviteCode &&
-                       incoming().creatorUid == request.auth.uid &&
-                       incoming().keys().hasAll([
-                         'inviteCode', 'circleId', 'circleName', 'creatorUid', 'createdAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'inviteCode', 'circleId', 'circleName', 'creatorUid', 'createdAt'
-                       ]) &&
-                       isValidTimestamp(incoming().createdAt) &&
-                       isValidCircleInvite(incoming()) &&
-                       exists(/databases/$(database)/documents/circles/$(incoming().circleId)) &&
-                       get(/databases/$(database)/documents/circles/$(incoming().circleId)).data.creatorUid == request.auth.uid;
-
-      allow update: if false;
-      allow delete: if isSignedIn() && isValidId(inviteCode) && existing().creatorUid == request.auth.uid;
+    // A new booking must be made by a neighbour other than the owner, against an available
+    // listing, with the listing's own price, deposit, title and owner copied verbatim.
+    function bookingMatchesListing(booking, listing) {
+      return listing.status == 'available' &&
+             listing.ownerUid != uid() &&
+             booking.circleId == listing.circleId &&
+             booking.listingKind == listing.kind &&
+             booking.listingTitle == listing.title &&
+             booking.grossAmountCents == listing.rateCents &&
+             booking.depositCents == listing.depositCents &&
+             booking.platformFeeCents == platformFeeFor(booking.grossAmountCents) &&
+             booking.providerNetCents == booking.grossAmountCents - booking.platformFeeCents &&
+             (
+               // Borrowing a tool: I pay, the owner provides.
+               (
+                 listing.kind == 'tool' &&
+                 booking.requesterUid == uid() &&
+                 booking.providerUid == listing.ownerUid &&
+                 booking.providerName == listing.ownerName
+               ) ||
+               // Claiming a micro-job: the owner pays, I provide the work.
+               (
+                 listing.kind == 'micro_job' &&
+                 booking.providerUid == uid() &&
+                 booking.requesterUid == listing.ownerUid &&
+                 booking.requesterName == listing.ownerName
+               )
+             );
     }
 
-    // --- Collection 4: /listings/{listingId} (Block-Member Scoped) ---
-    match /listings/{listingId} {
-      allow get: if isSignedIn() && isValidId(listingId) && request.auth.uid in existing().memberUids;
-      allow list: if isSignedIn() && request.auth.uid in existing().memberUids;
-
-      allow create: if isSignedIn() &&
-                       isValidId(listingId) &&
-                       incoming().ownerUid == request.auth.uid &&
-                       request.auth.uid in incoming().memberUids &&
-                       incoming().keys().hasAll([
-                         'circleId', 'ownerUid', 'ownerName', 'ownerTrustScore',
-                         'memberUids', 'kind', 'title', 'description', 'category',
-                         'rateCents', 'depositCents', 'distanceMiles', 'instantPickup',
-                         'photoUri', 'status', 'createdAt', 'updatedAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'circleId', 'ownerUid', 'ownerName', 'ownerTrustScore',
-                         'memberUids', 'kind', 'title', 'description', 'category',
-                         'rateCents', 'depositCents', 'distanceMiles', 'instantPickup',
-                         'photoUri', 'status', 'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidTimestamp(incoming().createdAt) &&
-                       isValidTimestamp(incoming().updatedAt) &&
-                       isValidListing(incoming()) &&
-                       exists(/databases/$(database)/documents/circles/$(incoming().circleId)) &&
-                       request.auth.uid in get(/databases/$(database)/documents/circles/$(incoming().circleId)).data.memberUids;
-
-      allow update: if isSignedIn() &&
-                       isValidId(listingId) &&
-                       isValidListing(incoming()) &&
-                       incoming().circleId == existing().circleId &&
-                       incoming().ownerUid == existing().ownerUid &&
-                       incoming().kind == existing().kind &&
-                       incoming().createdAt == existing().createdAt &&
-                       isValidTimestamp(incoming().updatedAt) &&
-                       (
-                         // Action 1: Owner edits listing details, availability, or syncs circle members
-                         (
-                           request.auth.uid == existing().ownerUid &&
-                           request.auth.uid in incoming().memberUids &&
-                           incoming().diff(existing()).affectedKeys().hasOnly([
-                             'title', 'description', 'category', 'rateCents',
-                             'depositCents', 'distanceMiles', 'instantPickup',
-                             'photoUri', 'status', 'memberUids', 'updatedAt'
-                           ])
-                         ) ||
-                         // Action 2: Circle member joins & syncs membership onto block listings
-                         (
-                           !(request.auth.uid in existing().memberUids) &&
-                           request.auth.uid in incoming().memberUids &&
-                           incoming().memberUids.hasAll(existing().memberUids) &&
-                           incoming().memberUids.size() == existing().memberUids.size() + 1 &&
-                           incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt']) &&
-                           exists(/databases/$(database)/documents/circles/$(existing().circleId)) &&
-                           request.auth.uid in get(/databases/$(database)/documents/circles/$(existing().circleId)).data.memberUids
-                         ) ||
-                         // Action 3: Verified block member updates availability status during booking
-                         (
-                           request.auth.uid in existing().memberUids &&
-                           incoming().memberUids == existing().memberUids &&
-                           incoming().status in ['available', 'reserved'] &&
-                           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
-                         )
-                       );
-
-      allow delete: if isSignedIn() && isValidId(listingId) && existing().ownerUid == request.auth.uid;
+    // True once the listing no longer points at this booking (or is gone altogether).
+    function listingReleasedFrom(bookingId, listingId) {
+      return !existsAfter(listingPath(listingId)) ||
+             getAfter(listingPath(listingId)).data.get('activeBookingId', '') != bookingId;
     }
 
-    // --- Collection 5: /bookings/{bookingId} (Participant-Isolated Escrow Ledger) ---
     match /bookings/{bookingId} {
-      allow get: if isSignedIn() && isValidId(bookingId) && request.auth.uid in existing().participantUids;
-      allow list: if isSignedIn() && request.auth.uid in existing().participantUids;
+      allow read: if isSignedIn() && uid() in existing().participantUids;
 
       allow create: if isSignedIn() &&
                        isValidId(bookingId) &&
-                       (request.auth.uid == incoming().requesterUid || request.auth.uid == incoming().providerUid) &&
+                       incoming().keys().hasAll(bookingFields()) &&
+                       incoming().keys().hasOnly(bookingFields()) &&
+                       isValidBooking(incoming()) &&
                        incoming().status == 'requested' &&
-                       incoming().keys().hasAll([
-                         'listingId', 'listingTitle', 'listingKind', 'circleId',
-                         'requesterUid', 'requesterName', 'providerUid', 'providerName',
-                         'participantUids', 'grossAmountCents', 'depositCents',
-                         'platformFeeCents', 'providerNetCents', 'status', 'notes',
-                         'createdAt', 'updatedAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'listingId', 'listingTitle', 'listingKind', 'circleId',
-                         'requesterUid', 'requesterName', 'providerUid', 'providerName',
-                         'participantUids', 'grossAmountCents', 'depositCents',
-                         'platformFeeCents', 'providerNetCents', 'status', 'notes',
-                         'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidTimestamp(incoming().createdAt) &&
-                       isValidTimestamp(incoming().updatedAt) &&
-                       isValidBooking(incoming()) &&
-                       exists(/databases/$(database)/documents/listings/$(incoming().listingId)) &&
-                       request.auth.uid in get(/databases/$(database)/documents/listings/$(incoming().listingId)).data.memberUids;
+                       incoming().participantUids == [incoming().requesterUid, incoming().providerUid] &&
+                       isServerTime(incoming().createdAt) &&
+                       isServerTime(incoming().updatedAt) &&
+                       bookingMatchesListing(incoming(), get(listingPath(incoming().listingId)).data) &&
+                       // Both neighbours must currently belong to the listing's circle.
+                       get(circlePath(incoming().circleId)).data.memberUids.hasAll(incoming().participantUids) &&
+                       // ...and the same write must reserve the listing for this booking, which is
+                       // what prevents two neighbours from booking it at once.
+                       getAfter(listingPath(incoming().listingId)).data.status == 'reserved' &&
+                       getAfter(listingPath(incoming().listingId)).data.activeBookingId == bookingId;
 
+      // Only status, notes and updatedAt may change, so the parties and the money terms are
+      // immutable. Completed and cancelled bookings match no transition and are therefore final.
       allow update: if isSignedIn() &&
-                       isValidId(bookingId) &&
-                       request.auth.uid in existing().participantUids &&
+                       uid() in existing().participantUids &&
                        isValidBooking(incoming()) &&
-                       // Terminal State Locking: completed/cancelled bookings are immutable
-                       !(existing().status in ['completed', 'cancelled']) &&
-                       // Immutable identity & financial terms
-                       incoming().listingId == existing().listingId &&
-                       incoming().listingTitle == existing().listingTitle &&
-                       incoming().listingKind == existing().listingKind &&
-                       incoming().circleId == existing().circleId &&
-                       incoming().requesterUid == existing().requesterUid &&
-                       incoming().requesterName == existing().requesterName &&
-                       incoming().providerUid == existing().providerUid &&
-                       incoming().providerName == existing().providerName &&
-                       incoming().participantUids == existing().participantUids &&
-                       incoming().grossAmountCents == existing().grossAmountCents &&
-                       incoming().depositCents == existing().depositCents &&
-                       incoming().platformFeeCents == existing().platformFeeCents &&
-                       incoming().providerNetCents == existing().providerNetCents &&
-                       incoming().createdAt == existing().createdAt &&
-                       isValidTimestamp(incoming().updatedAt) &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['status', 'notes', 'updatedAt']) &&
+                       changedKeys().hasOnly(['status', 'notes', 'updatedAt']) &&
+                       isServerTime(incoming().updatedAt) &&
                        (
-                         // Action 1: Approve & Hold Escrow
-                         (existing().status == 'requested' && incoming().status == 'escrow_held') ||
-                         // Action 2: Confirm Handoff Started
-                         (existing().status == 'escrow_held' && incoming().status == 'in_progress') ||
-                         // Action 3: Confirm Return & Release Payout
-                         (existing().status == 'in_progress' && incoming().status == 'completed') ||
-                         // Action 4: Cancel before handoff
-                         (existing().status in ['requested', 'escrow_held'] && incoming().status == 'cancelled')
+                         // The listing owner approves the request and locks the escrow.
+                         (
+                           existing().status == 'requested' &&
+                           incoming().status == 'escrow_held' &&
+                           uid() == listingOwnerOf(existing())
+                         ) ||
+                         // Either neighbour confirms the handoff has started.
+                         (
+                           existing().status == 'escrow_held' &&
+                           incoming().status == 'in_progress'
+                         ) ||
+                         // The listing owner confirms the return / the finished job, which
+                         // releases the payout. The listing is freed in the same write.
+                         (
+                           existing().status == 'in_progress' &&
+                           incoming().status == 'completed' &&
+                           uid() == listingOwnerOf(existing()) &&
+                           listingReleasedFrom(bookingId, existing().listingId)
+                         ) ||
+                         // Either neighbour cancels before the handoff. Frees the listing too.
+                         (
+                           existing().status in ['requested', 'escrow_held'] &&
+                           incoming().status == 'cancelled' &&
+                           listingReleasedFrom(bookingId, existing().listingId)
+                         )
                        );
 
-      // Escrow ledger records are auditable and cannot be deleted
-      allow delete: if false;
+      // No delete rule: ledger entries are permanent.
     }
   }
 }

@@ -1,5 +1,6 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
 import java.time.Duration
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 
 plugins {
   alias(libs.plugins.android.application)
@@ -105,6 +106,7 @@ dependencies {
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
+  implementation(libs.androidx.exifinterface)
   // implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -112,7 +114,7 @@ dependencies {
   implementation(libs.androidx.navigation.compose)
   // implementation(libs.androidx.room.ktx)
   // implementation(libs.androidx.room.runtime)
-  implementation(libs.coil.compose)
+  // implementation(libs.coil.compose)
   // implementation(libs.converter.moshi)
   // implementation(libs.firebase.ai)
   implementation(libs.firebase.firestore)
@@ -149,7 +151,16 @@ dependencies {
 }
 
 tasks.withType<Test> {
-  failFast = true
-  timeout.set(Duration.ofMinutes(2))
-  testLogging { events("passed", "failed", "skipped") }
+  // Generous: the first run also downloads Robolectric's Android runtime.
+  timeout.set(Duration.ofMinutes(10))
+  testLogging {
+    events("passed", "failed", "skipped")
+    exceptionFormat = TestExceptionFormat.FULL
+  }
+  // The repository tests need the Firebase emulators and skip themselves when those are not
+  // running, so the outcome depends on something Gradle cannot see. Never reuse an earlier
+  // result: a run without emulators (everything skipped) must not be served from the build
+  // cache to a later run with them.
+  outputs.upToDateWhen { false }
+  outputs.cacheIf { false }
 }

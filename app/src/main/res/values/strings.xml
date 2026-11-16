@@ -1,6 +1,5 @@
 <resources>
     <string name="app_name">BlockBench</string>
-    <string name="tagline">Hyper-local tools &amp; micro-services on your block</string>
 
     <!-- Auth -->
     <string name="auth_headline">Your street\'s shared workbench.</string>
@@ -18,31 +17,22 @@
     <string name="create_block_tab">Start a Block</string>
     <string name="join_block_tab">Join with Code</string>
     <string name="block_name_hint">e.g. Oak &amp; 14th Block</string>
-    <string name="invite_code_hint">Enter 6-character code (e.g. OAK482)</string>
+    <string name="invite_code_hint">e.g. OAK7K2MQ</string>
     <string name="use_location_area">Detect my neighborhood area</string>
     <string name="create_block_cta">Create Block Circle</string>
     <string name="join_block_cta">Unlock Block Feed</string>
 
     <!-- Feed & Listings -->
     <string name="post_listing_fab">Post Tool or Job</string>
-    <string name="search_listings_hint">Search pressure washer, ladder, latch fix...</string>
-    <string name="filter_all">All Nearby</string>
-    <string name="filter_tools">Tools</string>
-    <string name="filter_jobs">Micro-Jobs</string>
-    <string name="filter_instant">Instant Pickup</string>
+    <string name="search_listings_hint">Search pressure washer, ladder, latch fix…</string>
 
     <!-- Escrow & Monetization -->
     <string name="escrow_fee_note">5% transparent micro-escrow fee protects deposits and guarantees instant payout release.</string>
     <string name="pro_alerts_title">BlockBench Pro Alerts</string>
     <string name="pro_alerts_price">$4.99/mo · Priority Feed &amp; Auto-Match</string>
-    <string name="share_invite_cta">Invite Neighbor (1-Tap)</string>
-    <string name="share_trust_card_cta">Share Trust Card</string>
+    <string name="pro_alerts_activate">Activate Pro Alerts ($4.99/mo)</string>
 
-    <!-- Review Enhancements -->
-    <string name="copy_invite_code">Copy Code</string>
-    <string name="edit_listing">Edit Details</string>
-    <string name="switch_block_title">Your Neighborhood Blocks</string>
-    <string name="leave_block_cta">Leave Block</string>
+    <!-- Errors -->
     <string name="retry_sync">Retry Connection</string>
 
     <!-- Build configuration -->
