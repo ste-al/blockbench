@@ -44,4 +44,8 @@
     <string name="switch_block_title">Your Neighborhood Blocks</string>
     <string name="leave_block_cta">Leave Block</string>
     <string name="retry_sync">Retry Connection</string>
+
+    <!-- Build configuration -->
+    <string name="missing_config_title">Firebase isn\'t configured</string>
+    <string name="missing_config_body">This build was made without app/google-services.json, so it has no backend to connect to. Download the file for your Firebase project from the Firebase console, place it in the app/ folder and rebuild.</string>
 </resources>

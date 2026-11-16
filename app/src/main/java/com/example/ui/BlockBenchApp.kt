@@ -93,7 +93,7 @@ fun BlockBenchAppRoot(auth: FirebaseAuth = Firebase.auth) {
   val user = currentUser
 
   if (user == null) {
-    AuthScreen(onAuthSuccess = {})
+    AuthScreen()
   } else {
     val uid = user.uid
     val displayName = user.displayName ?: user.email?.substringBefore("@") ?: "Neighbor"

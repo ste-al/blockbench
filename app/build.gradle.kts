@@ -71,6 +71,14 @@ android {
   }
 }
 
+// The repo-root debug.keystore used by the "debugConfig" signing config above is provided by
+// AI Studio and is git-ignored, so it does not exist in a plain checkout (local development, CI).
+// Without it every debug build fails at `validateSigningDebug`. Fall back to the standard Android
+// debug keystore in that case; when the file is present nothing changes.
+if (!rootProject.file("debug.keystore").exists()) {
+  android.buildTypes.getByName("debug").signingConfig = android.signingConfigs.getByName("debug")
+}
+
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
 // to match the convention used in Web projects.
 secrets {
@@ -116,6 +124,8 @@ dependencies {
   // implementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
+  // Task.await() is used directly by the data and auth layers; do not rely on Firebase to leak it.
+  implementation(libs.kotlinx.coroutines.play.services)
   // implementation(libs.logging.interceptor)
   // implementation(libs.moshi.kotlin)
   // implementation(libs.okhttp)

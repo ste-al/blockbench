@@ -1,14 +1,17 @@
 package com.example.auth
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.util.Log
 import androidx.credentials.ClearCredentialStateRequest
+import androidx.credentials.Credential
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
-import com.example.R
+import androidx.credentials.exceptions.NoCredentialException
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
@@ -18,6 +21,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.awaitClose
@@ -29,30 +33,48 @@ import kotlinx.coroutines.withContext
 
 private const val AUTH_TAG = "BlockBenchAuth"
 
+sealed interface GoogleSignInResult {
+  data object Success : GoogleSignInResult
+
+  /** The user dismissed the account picker; nothing to report. */
+  data object Cancelled : GoogleSignInResult
+
+  data class Failure(val message: String) : GoogleSignInResult
+}
+
 fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
   val listener = FirebaseAuth.AuthStateListener { auth -> trySend(auth.currentUser) }
   addAuthStateListener(listener)
   awaitClose { removeAuthStateListener(listener) }
 }
 
-fun attemptAutoSignIn(
-  context: Context,
-  credentialManager: CredentialManager,
-  onAuthSuccess: () -> Unit,
-  onUnauthenticated: () -> Unit,
-  scope: CoroutineScope,
-) {
-  if (Firebase.auth.currentUser != null) {
-    onAuthSuccess()
-    return
+/**
+ * The OAuth web client id that the google-services plugin generates from `google-services.json`.
+ *
+ * It is resolved by name on purpose: the resource only exists when a `google-services.json` was
+ * present at build time, and a direct `R.string.default_web_client_id` reference would make the
+ * whole project fail to compile without that (untracked) file.
+ */
+@SuppressLint("DiscouragedApi")
+internal fun Context.googleWebClientId(): String? {
+  val resId = resources.getIdentifier("default_web_client_id", "string", packageName)
+  return if (resId == 0) null else getString(resId).takeIf { it.isNotBlank() }
+}
+
+private tailrec fun Context.findActivity(): Activity? =
+  when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
   }
-  val clientId =
-    try {
-      context.getString(R.string.default_web_client_id)
-    } catch (e: Exception) {
-      onUnauthenticated()
-      return
-    }
+
+/**
+ * Signs a returning user back in without any UI when they already authorised this app.
+ * Returns true when a Firebase session was established.
+ */
+suspend fun trySilentGoogleSignIn(context: Context, credentialManager: CredentialManager): Boolean {
+  if (Firebase.auth.currentUser != null) return true
+  val clientId = context.googleWebClientId() ?: return false
 
   val googleIdOption =
     GetGoogleIdOption.Builder()
@@ -60,84 +82,74 @@ fun attemptAutoSignIn(
       .setServerClientId(clientId)
       .setAutoSelectEnabled(true)
       .build()
-
   val request = GetCredentialRequest.Builder().addCredentialOption(googleIdOption).build()
 
-  scope.launch {
-    try {
-      val result = credentialManager.getCredential(context, request)
-      val credential = result.credential
-      if (
-        credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
-      ) {
-        val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
-        val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
-        Firebase.auth.signInWithCredential(authCredential).await()
-        onAuthSuccess()
-      } else {
-        onUnauthenticated()
-      }
-    } catch (e: Exception) {
-      Log.d(AUTH_TAG, "Silent auto sign-in unavailable: ${e.message}")
-      onUnauthenticated()
-    }
+  return try {
+    val result = credentialManager.getCredential(context.findActivity() ?: context, request)
+    signInToFirebase(result.credential)
+  } catch (e: CancellationException) {
+    throw e
+  } catch (e: Exception) {
+    Log.d(AUTH_TAG, "Silent sign-in unavailable: ${e.message}")
+    false
   }
 }
 
-fun onGoogleSignInClicked(
+/** Runs the interactive "Sign in with Google" flow and exchanges the result for a Firebase session. */
+suspend fun signInWithGoogle(
   context: Context,
   credentialManager: CredentialManager,
-  onAuthSuccess: () -> Unit,
-  onAuthError: (String) -> Unit,
-  scope: CoroutineScope,
-  onAuthCancelled: () -> Unit = {},
-) {
+): GoogleSignInResult {
   val clientId =
-    try {
-      context.getString(R.string.default_web_client_id)
-    } catch (e: Exception) {
-      onAuthError("Google Sign-In configuration missing: default_web_client_id not found")
-      return
-    }
-
-  val activity = context as? Activity
-  if (activity == null) {
-    onAuthError("Unable to launch Google Sign-In outside an Activity context.")
-    return
-  }
+    context.googleWebClientId()
+      ?: return GoogleSignInResult.Failure(
+        "Google Sign-In is not configured for this build (google-services.json is missing)."
+      )
+  val activity =
+    context.findActivity()
+      ?: return GoogleSignInResult.Failure("Google Sign-In needs to be started from a screen.")
 
   val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
   val request = GetCredentialRequest.Builder().addCredentialOption(signInOption).build()
 
-  scope.launch {
-    try {
-      val result = credentialManager.getCredential(activity, request)
-      val credential = result.credential
-      if (
-        credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
-      ) {
-        val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
-        val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
-        Firebase.auth.signInWithCredential(authCredential).await()
-        onAuthSuccess()
-      } else {
-        onAuthError("Unexpected credential type received.")
-      }
-    } catch (e: GetCredentialCancellationException) {
-      Log.w(AUTH_TAG, "Google Sign-In cancelled or dismissed: ${e.message}", e)
-      onAuthCancelled()
-    } catch (e: Exception) {
-      Log.e(AUTH_TAG, "Google Sign-In failed", e)
-      onAuthError(e.localizedMessage ?: "Sign in failed. Please try again.")
+  return try {
+    val result = credentialManager.getCredential(activity, request)
+    if (signInToFirebase(result.credential)) {
+      GoogleSignInResult.Success
+    } else {
+      GoogleSignInResult.Failure("Google returned an unexpected credential. Please try again.")
     }
+  } catch (e: CancellationException) {
+    throw e
+  } catch (e: GetCredentialCancellationException) {
+    Log.d(AUTH_TAG, "Google Sign-In dismissed: ${e.message}")
+    GoogleSignInResult.Cancelled
+  } catch (e: NoCredentialException) {
+    Log.w(AUTH_TAG, "No Google account available", e)
+    GoogleSignInResult.Failure(
+      "No Google account is available on this device. Add one in system settings and try again."
+    )
+  } catch (e: Exception) {
+    Log.e(AUTH_TAG, "Google Sign-In failed", e)
+    GoogleSignInResult.Failure(e.localizedMessage ?: "Sign in failed. Please try again.")
   }
 }
 
-fun signOutUser(
-  credentialManager: CredentialManager,
-  scope: CoroutineScope,
-  onSignOutComplete: () -> Unit = {},
-) {
+private suspend fun signInToFirebase(credential: Credential): Boolean {
+  if (credential !is CustomCredential || credential.type != TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+    return false
+  }
+  val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
+  Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(googleIdToken, null)).await()
+  return true
+}
+
+/**
+ * Signs out of Firebase and clears the Credential Manager state so the next launch does not
+ * silently sign the same account back in. Runs to completion even if [scope] is cancelled by the
+ * UI leaving composition as a result of the sign-out itself.
+ */
+fun signOutUser(credentialManager: CredentialManager, scope: CoroutineScope) {
   scope.launch {
     withContext(NonCancellable) {
       try {
@@ -146,7 +158,6 @@ fun signOutUser(
         Log.w(AUTH_TAG, "Failed to clear credential state: ${e.message}")
       } finally {
         Firebase.auth.signOut()
-        onSignOutComplete()
       }
     }
   }
