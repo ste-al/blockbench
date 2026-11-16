@@ -21,6 +21,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
@@ -32,6 +33,13 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
 private const val AUTH_TAG = "BlockBenchAuth"
+
+/**
+ * Set when the user signs out. The sign-in screen tries a silent sign-in whenever it appears,
+ * which right after an explicit sign-out would immediately put Google's account sheet back in
+ * front of the person who just asked to leave. Cleared by the next deliberate sign-in.
+ */
+private val signedOutThisSession = AtomicBoolean(false)
 
 sealed interface GoogleSignInResult {
   data object Success : GoogleSignInResult
@@ -74,6 +82,7 @@ private tailrec fun Context.findActivity(): Activity? =
  */
 suspend fun trySilentGoogleSignIn(context: Context, credentialManager: CredentialManager): Boolean {
   if (Firebase.auth.currentUser != null) return true
+  if (signedOutThisSession.get()) return false
   val clientId = context.googleWebClientId() ?: return false
 
   val googleIdOption =
@@ -115,6 +124,7 @@ suspend fun signInWithGoogle(
   return try {
     val result = credentialManager.getCredential(activity, request)
     if (signInToFirebase(result.credential)) {
+      signedOutThisSession.set(false)
       GoogleSignInResult.Success
     } else {
       GoogleSignInResult.Failure("Google returned an unexpected credential. Please try again.")
@@ -150,6 +160,7 @@ private suspend fun signInToFirebase(credential: Credential): Boolean {
  * UI leaving composition as a result of the sign-out itself.
  */
 fun signOutUser(credentialManager: CredentialManager, scope: CoroutineScope) {
+  signedOutThisSession.set(true)
   scope.launch {
     withContext(NonCancellable) {
       try {

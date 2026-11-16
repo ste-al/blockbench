@@ -95,6 +95,15 @@ fun formatCents(cents: Long): String = String.format(Locale.US, "$%,.2f", cents 
 
 fun formatMiles(miles: Double): String = String.format(Locale.US, "%.1f mi", miles)
 
+fun neighborsLabel(count: Int): String = if (count == 1) "1 neighbor" else "$count neighbors"
+
+/**
+ * One-line summary of a block. The invite code comes before the radius so that, where the line
+ * has to be cut short, the code (which people read off the screen) is what survives.
+ */
+fun circleSummary(circle: BlockCircle): String =
+  "${neighborsLabel(circle.memberUids.size)} · Code ${circle.inviteCode} · ${formatMiles(circle.radiusMiles)}"
+
 /** Snaps a slider position to one decimal, so what is stored is what the label shows. */
 fun Float.toTenthsOfAMile(): Double = (this * 10f).roundToInt() / 10.0
 
@@ -883,8 +892,7 @@ fun BlockSwitcherSheet(
                     }
                   }
                   Text(
-                    text =
-                      "${circle.memberUids.size} neighbors · ${formatMiles(circle.radiusMiles)} · Code ${circle.inviteCode}",
+                    text = circleSummary(circle),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                   )

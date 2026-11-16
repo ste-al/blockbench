@@ -86,6 +86,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.model.BlockCircle
+import com.example.model.Booking
 import com.example.model.CraftCategories
 import com.example.model.EscrowFeeBreakdown
 import com.example.model.Listing
@@ -101,6 +102,7 @@ import com.example.ui.components.EscrowBreakdownCard
 import com.example.ui.components.ListingCraftCard
 import com.example.ui.components.ListingPhotoCodec
 import com.example.ui.components.ListingThumbnail
+import com.example.ui.components.circleSummary
 import com.example.ui.components.copyInviteCodeToClipboard
 import com.example.ui.components.formatCents
 import com.example.ui.components.formatMiles
@@ -209,8 +211,7 @@ fun FeedScreen(
                 )
               }
               Text(
-                text =
-                  "${activeCircle.memberUids.size} neighbors · ${formatMiles(activeCircle.radiusMiles)} · Code ${activeCircle.inviteCode}",
+                text = circleSummary(activeCircle),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -943,6 +944,10 @@ private fun ListingDetailSheet(
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   var notes by remember { mutableStateOf("") }
   var showDeleteConfirm by remember { mutableStateOf(false) }
+  // The listing turns "reserved" the instant our own booking commits, a moment before the sheet
+  // is told to close. Keep the form up for that moment rather than flashing "a neighbor has this
+  // reserved" at the person who just reserved it.
+  var requestSent by remember { mutableStateOf(false) }
   val isJob = listing.isMicroJob
   val breakdown = EscrowFeeBreakdown.calculate(listing.rateCents, listing.depositCents)
   // A booking in flight holds the listing: it can be edited, but not paused or deleted.
@@ -1050,17 +1055,20 @@ private fun ListingDetailSheet(
             Text("Delete")
           }
         }
-      } else if (listing.status == Listing.STATUS_AVAILABLE) {
+      } else if (listing.status == Listing.STATUS_AVAILABLE || (requestSent && isBusy)) {
         OutlinedTextField(
           value = notes,
-          onValueChange = { notes = it.take(250) },
+          onValueChange = { notes = it.take(Booking.MAX_NOTES_LENGTH) },
           label = { Text("Pickup / Arrival Note") },
           placeholder = { Text("e.g. Can swing by at 5:30 PM today") },
           singleLine = true,
           modifier = Modifier.fillMaxWidth().testTag("booking_notes_input"),
         )
         Button(
-          onClick = { onBook(notes) },
+          onClick = {
+            requestSent = true
+            onBook(notes)
+          },
           enabled = !isBusy,
           modifier = Modifier.fillMaxWidth().height(52.dp).testTag("confirm_escrow_book_button"),
         ) {

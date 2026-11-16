@@ -58,6 +58,7 @@ import com.example.ui.components.NeighborTrustCardView
 import com.example.ui.components.copyInviteCodeToClipboard
 import com.example.ui.components.formatCents
 import com.example.ui.components.formatMiles
+import com.example.ui.components.neighborsLabel
 import com.example.ui.components.shareNeighborhoodInvite
 import com.example.ui.components.shareTrustCard
 import com.example.ui.theme.blockBenchColors
@@ -88,8 +89,9 @@ fun TrustHubScreen(
   val context = LocalContext.current
   val brand = blockBenchColors
 
-  // Local edits; re-seeded whenever the saved value changes.
-  var proEnabled by remember(profile.proAlertsEnabled) { mutableStateOf(profile.proAlertsEnabled) }
+  // The switch always shows what is saved: if a save fails it must not be left looking "on".
+  val proEnabled = profile.proAlertsEnabled
+  // Unsaved edits to the rules; re-seeded whenever the saved value changes.
   var alertRadius by
     remember(profile.alertRadiusMiles) { mutableDoubleStateOf(profile.alertRadiusMiles) }
   var alertCats by remember(profile.alertCategories) { mutableStateOf(profile.alertCategories) }
@@ -201,10 +203,7 @@ fun TrustHubScreen(
             }
             Switch(
               checked = proEnabled,
-              onCheckedChange = { checked ->
-                proEnabled = checked
-                onSaveProAlerts(checked, alertRadius, alertCats)
-              },
+              onCheckedChange = { checked -> onSaveProAlerts(checked, alertRadius, alertCats) },
               enabled = !isBusy,
               modifier = Modifier.testTag("pro_alerts_switch"),
             )
@@ -246,10 +245,7 @@ fun TrustHubScreen(
           // The one button activates the subscription when it is off and saves edited rules when
           // it is on. (It used to save "off" again while offering to "Activate".)
           Button(
-            onClick = {
-              proEnabled = true
-              onSaveProAlerts(true, alertRadius, alertCats)
-            },
+            onClick = { onSaveProAlerts(true, alertRadius, alertCats) },
             enabled = !isBusy && (!proEnabled || hasUnsavedRuleChanges),
             modifier = Modifier.fillMaxWidth().testTag("save_pro_alerts_button"),
           ) {
@@ -323,7 +319,7 @@ fun TrustHubScreen(
           Text(text = "Neighborhood Block & Account", style = MaterialTheme.typography.titleMedium)
           Text(
             text =
-              "Active block: ${activeCircle.name} (${activeCircle.memberUids.size} neighbors). " +
+              "Active block: ${activeCircle.name} (${neighborsLabel(activeCircle.memberUids.size)}). " +
                 "You belong to $circlesCount " +
                 if (circlesCount == 1) "block." else "blocks.",
             style = MaterialTheme.typography.bodyMedium,
