@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="parchment_bg">#FFFBF8F3</color>
-    <color name="workshop_terracotta">#FFB84A27</color>
-    <color name="deep_pine">#FF1F3A33</color>
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
+    <!-- Shown behind the first Compose frame; has a values-night counterpart so a dark-theme
+         launch does not start with a flash of the light background. -->
+    <color name="window_background">#FFFBF8F3</color>
 </resources>
