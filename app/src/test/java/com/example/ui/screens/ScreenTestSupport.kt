@@ -7,6 +7,8 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.isRoot
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
 import androidx.compose.ui.test.junit4.ComposeTestRule
 import com.example.model.BlockCircle
@@ -21,6 +23,9 @@ import org.junit.Assert.assertEquals
  * keeps whole screens composed, so lazy lists do not need scrolling to reach a node.
  */
 internal const val TALL_PHONE = "w411dp-h2400dp-xxhdpi"
+
+/** A small phone (360dp is the most common narrow width), as tall as [TALL_PHONE] and more. */
+internal const val NARROW_PHONE = "w360dp-h3200dp-xxhdpi"
 
 internal const val ME = "uid_me"
 internal const val NEIGHBOR = "uid_bob"
@@ -46,6 +51,38 @@ internal fun ComposeTestRule.assertEveryControlHasAName() {
       .map { it.config.getOrNull(SemanticsProperties.TestTag) ?: "untagged, at ${it.boundsInRoot}" }
   assertEquals("Controls a screen reader has no name for", emptyList<String>(), unnamed)
 }
+
+/**
+ * Fails when a piece of text does not fit and is cut off instead of wrapping or ending in an
+ * ellipsis: a button label clipped mid-word, a badge squeezed to a few letters. Text that is
+ * shortened with an ellipsis on purpose, such as a long name, is left alone.
+ */
+internal fun ComposeTestRule.assertNoTextIsCutOff() {
+  val cutOff =
+    onAllNodes(isRoot(), useUnmergedTree = true)
+      .fetchSemanticsNodes()
+      .flatMap { it.selfAndDescendants() }
+      .mapNotNull { node -> node.textLayout()?.takeIf { it.isCutOff }?.layoutInput?.text?.text }
+  assertEquals("Text cut off where it does not fit", emptyList<String>(), cutOff)
+}
+
+private fun SemanticsNode.textLayout(): TextLayoutResult? {
+  val results = mutableListOf<TextLayoutResult>()
+  config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(results)
+  return results.firstOrNull()
+}
+
+/**
+ * The layout the semantics action hands out is laid out again at the full width the text was
+ * offered, so its width says nothing about how wide the text is drawn and `hasVisualOverflow`
+ * is set for almost everything. What does show text that is cut off is that it needs more lines
+ * than it may have, or more height than it was given. (A label that may not wrap shows up as
+ * needing more lines, since this layout wraps it.)
+ */
+private val TextLayoutResult.isCutOff: Boolean
+  get() =
+    layoutInput.overflow == TextOverflow.Clip &&
+      (multiParagraph.didExceedMaxLines || size.height < multiParagraph.height)
 
 private fun SemanticsNode.selfAndDescendants(): List<SemanticsNode> =
   listOf(this) + children.flatMap { it.selfAndDescendants() }

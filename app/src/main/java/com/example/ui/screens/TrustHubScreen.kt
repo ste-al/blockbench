@@ -53,6 +53,7 @@ import com.example.model.CraftCategories
 import com.example.model.EscrowFeeBreakdown
 import com.example.model.Listing
 import com.example.model.UserProfile
+import com.example.ui.components.ActionRow
 import com.example.ui.components.BlockRadiusSlider
 import com.example.ui.components.CraftCard
 import com.example.ui.components.LedgerRow
@@ -331,13 +332,10 @@ fun TrustHubScreen(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
+          ActionRow(weights = listOf(1f, 0f)) {
             OutlinedButton(
               onClick = onOpenBlockSwitcher,
-              modifier = Modifier.weight(1f).testTag("switch_block_button"),
+              modifier = Modifier.testTag("switch_block_button"),
             ) {
               Icon(
                 imageVector = Icons.Filled.SwapHoriz,

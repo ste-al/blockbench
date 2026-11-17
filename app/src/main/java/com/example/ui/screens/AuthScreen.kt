@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -168,7 +169,7 @@ fun AuthScreen(modifier: Modifier = Modifier) {
         },
         enabled = !isSigningIn,
         modifier =
-          Modifier.fillMaxWidth().height(54.dp).testTag("google_sign_in_button"),
+          Modifier.fillMaxWidth().heightIn(min = 54.dp).testTag("google_sign_in_button"),
         shape = RoundedCornerShape(14.dp),
         colors =
           ButtonDefaults.buttonColors(

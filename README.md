@@ -98,6 +98,8 @@ npm run test:android               # everything in the first line, plus the test
   all of them and fails when a control has nothing a screen reader could call it by.
 - `ThemeContrastTest` holds both colour schemes to the WCAG contrast minimums for every pairing
   the app draws. Run it after touching `Color.kt`.
+- `TextFitTest` renders the screens on a 360dp phone at the default and the largest text size
+  and fails on any text that is clipped instead of wrapped.
 - `AppShellSmokeTest` walks through the whole app against the emulators (onboarding, posting a
   listing, the three tabs, signing out) to catch wiring mistakes the focused tests cannot see.
 

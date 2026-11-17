@@ -13,16 +13,22 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -60,6 +66,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -71,12 +78,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.data.repository.BlockBenchRepository
@@ -239,10 +251,133 @@ fun CraftBadge(
         style = MaterialTheme.typography.labelSmall,
         color = contentColor,
         maxLines = 1,
+        softWrap = false,
       )
     }
   }
 }
+
+/**
+ * Whether the text size is turned up far enough that parts laid out side by side stop fitting
+ * next to each other on a phone. Layouts that would otherwise squeeze a name, a code or a label
+ * out of sight put their parts one under the other instead.
+ */
+@Composable
+@ReadOnlyComposable
+fun isLargeText(): Boolean = LocalDensity.current.fontScale >= LARGE_TEXT_FONT_SCALE
+
+private const val LARGE_TEXT_FONT_SCALE = 1.3f
+
+/**
+ * Badges in a line with [trailing] at the far end. Badges that do not fit move to the next line;
+ * in a plain Row the last one was squeezed until its text was cut off ("Ava" for "Available").
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun BadgeRow(
+  trailing: @Composable () -> Unit,
+  modifier: Modifier = Modifier,
+  leading: @Composable () -> Unit,
+) {
+  FlowRow(
+    modifier = modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    verticalArrangement = Arrangement.spacedBy(6.dp),
+  ) {
+    leading()
+    // Takes up whatever is left of the line, which is what keeps [trailing] at the end of it.
+    Spacer(modifier = Modifier.weight(1f))
+    trailing()
+  }
+}
+
+/**
+ * Buttons side by side, sharing the line by [weights] the way a Row's weights would, as long as
+ * each of them keeps room for its whole label; otherwise one under the other, each the full
+ * width. A plain Row cut labels off instead: "Decli" with large text, and "1-Tap Invit" at the
+ * normal text size on a 360dp phone.
+ *
+ * Give one weight per button, in order. A weight of 0 keeps a button at its natural width, like
+ * a Row child without a weight. The buttons should not set a width of their own.
+ */
+@Composable
+fun ActionRow(
+  weights: List<Float>,
+  modifier: Modifier = Modifier,
+  content: @Composable () -> Unit,
+) {
+  require(weights.all { it >= 0f }) { "Weights cannot be negative" }
+  Layout(content = content, modifier = modifier.fillMaxWidth()) { measurables, constraints ->
+    check(measurables.size == weights.size) { "ActionRow needs one weight per button" }
+    val gap = ACTION_ROW_GAP.roundToPx()
+    val natural = measurables.map { it.maxIntrinsicWidth(Constraints.Infinity) }
+    val width =
+      if (constraints.hasBoundedWidth) {
+        constraints.maxWidth
+      } else {
+        natural.sum() + gap * (natural.size - 1).coerceAtLeast(0)
+      }
+    val sideBySide = sideBySideWidths(width, gap, natural, weights)
+    if (sideBySide != null) {
+      val placeables =
+        measurables.mapIndexed { i, button ->
+          button.measure(
+            constraints.copy(minWidth = sideBySide[i], maxWidth = sideBySide[i], minHeight = 0)
+          )
+        }
+      val height = placeables.maxOfOrNull { it.height } ?: 0
+      layout(width, height.coerceIn(constraints.minHeight, constraints.maxHeight)) {
+        var x = 0
+        placeables.forEach { button ->
+          button.placeRelative(x, (height - button.height) / 2)
+          x += button.width + gap
+        }
+      }
+    } else {
+      val placeables =
+        measurables.map { button ->
+          button.measure(constraints.copy(minWidth = width, maxWidth = width, minHeight = 0))
+        }
+      val stackGap = ACTION_STACK_GAP.roundToPx()
+      val height = placeables.sumOf { it.height } + stackGap * (placeables.size - 1).coerceAtLeast(0)
+      layout(width, height.coerceIn(constraints.minHeight, constraints.maxHeight)) {
+        var y = 0
+        placeables.forEach { button ->
+          button.placeRelative(0, y)
+          y += button.height + stackGap
+        }
+      }
+    }
+  }
+}
+
+/**
+ * How wide each button is when they share one line [width] wide, or null when that would leave
+ * one of them narrower than its [natural] width.
+ */
+internal fun sideBySideWidths(
+  width: Int,
+  gap: Int,
+  natural: List<Int>,
+  weights: List<Float>,
+): List<Int>? {
+  val gaps = gap * (natural.size - 1).coerceAtLeast(0)
+  val unweighted = natural.indices.filter { weights[it] == 0f }.sumOf { natural[it] }
+  val shared = width - gaps - unweighted
+  if (shared < 0) return null
+  val totalWeight = weights.sum()
+  val widths =
+    natural.indices
+      .map { i -> if (weights[i] == 0f) natural[i] else (shared * weights[i] / totalWeight).toInt() }
+      .toMutableList()
+  // Rounding down leaves a pixel or two of the line over; the last weighted button takes them.
+  val lastWeighted = weights.indexOfLast { it > 0f }
+  if (lastWeighted >= 0) widths[lastWeighted] += width - gaps - widths.sum()
+  return widths.takeIf { it.indices.all { i -> it[i] >= natural[i] } }
+}
+
+private val ACTION_ROW_GAP = 10.dp
+private val ACTION_STACK_GAP = 8.dp
 
 @Composable
 fun ListingCraftCard(
@@ -272,56 +407,49 @@ fun ListingCraftCard(
     modifier = modifier.fillMaxWidth().testTag("listing_card_${listing.id}"),
   ) {
     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Row(
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
+      BadgeRow(
+        trailing = {
           CraftBadge(
-            text = if (isJob) "MICRO-JOB" else "TOOL",
-            containerColor = kindContainer,
-            contentColor = kindContent,
+            text = listingStatusLabel(listing),
+            containerColor =
+              if (isAvailable) brand.escrowContainer else MaterialTheme.colorScheme.surfaceVariant,
+            contentColor =
+              if (isAvailable) {
+                brand.onEscrowContainer
+              } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+              },
+          )
+        }
+      ) {
+        CraftBadge(
+          text = if (isJob) "MICRO-JOB" else "TOOL",
+          containerColor = kindContainer,
+          contentColor = kindContent,
+          leadingIcon = {
+            Icon(
+              imageVector = if (isJob) Icons.Filled.Handyman else Icons.Filled.Build,
+              contentDescription = null,
+              modifier = Modifier.size(14.dp),
+              tint = kindContent,
+            )
+          },
+        )
+        if (listing.instantPickup) {
+          CraftBadge(
+            text = "INSTANT",
+            containerColor = brand.proContainer,
+            contentColor = brand.onProContainer,
             leadingIcon = {
               Icon(
-                imageVector = if (isJob) Icons.Filled.Handyman else Icons.Filled.Build,
+                imageVector = Icons.Filled.ElectricBolt,
                 contentDescription = null,
-                modifier = Modifier.size(14.dp),
-                tint = kindContent,
+                modifier = Modifier.size(13.dp),
+                tint = brand.onProContainer,
               )
             },
           )
-          if (listing.instantPickup) {
-            CraftBadge(
-              text = "INSTANT",
-              containerColor = brand.proContainer,
-              contentColor = brand.onProContainer,
-              leadingIcon = {
-                Icon(
-                  imageVector = Icons.Filled.ElectricBolt,
-                  contentDescription = null,
-                  modifier = Modifier.size(13.dp),
-                  tint = brand.onProContainer,
-                )
-              },
-            )
-          }
         }
-
-        CraftBadge(
-          text = listingStatusLabel(listing),
-          containerColor =
-            if (isAvailable) brand.escrowContainer else MaterialTheme.colorScheme.surfaceVariant,
-          contentColor =
-            if (isAvailable) {
-              brand.onEscrowContainer
-            } else {
-              MaterialTheme.colorScheme.onSurfaceVariant
-            },
-        )
       }
 
       Row(
@@ -364,67 +492,113 @@ fun ListingCraftCard(
 
       HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Row(
-          modifier = Modifier.weight(1f),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          // Names can be 60 characters long; let the name give way, not the price beside it.
-          Text(
-            text = if (isOwnListing) "Posted by you" else listing.ownerName,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false),
-          )
-          Icon(
-            imageVector = Icons.Filled.Star,
-            contentDescription = "Trust score",
-            modifier = Modifier.size(14.dp),
-            tint = brand.pro,
-          )
-          Text(
-            text = String.format(Locale.US, "%.1f", listing.ownerTrustScore),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-          )
-          Text(
-            text = "· ${formatMiles(listing.distanceMiles)}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-          )
+      if (isLargeText()) {
+        // Side by side, the price leaves no room for the name at this text size.
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+          ListingOwnerLine(listing, isOwnListing, stacked = true, modifier = Modifier.fillMaxWidth())
+          ListingPrice(listing, horizontalAlignment = Alignment.Start)
         }
-
-        Column(horizontalAlignment = Alignment.End) {
-          Text(
-            text =
-              if (isJob) {
-                "${formatCents(listing.rateCents)} payout"
-              } else {
-                "${formatCents(listing.rateCents)}/use"
-              },
-            style = MonoFigureStyle,
-            color = MaterialTheme.colorScheme.primary,
-            maxLines = 1,
-          )
-          if (!isJob && listing.depositCents > 0L) {
-            Text(
-              text = "${formatCents(listing.depositCents)} deposit",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-            )
-          }
+      } else {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          ListingOwnerLine(listing, isOwnListing, stacked = false, modifier = Modifier.weight(1f))
+          ListingPrice(listing, horizontalAlignment = Alignment.End)
         }
       }
+    }
+  }
+}
+
+/**
+ * Who posted a listing, their trust score and how far away it is: on one line, or [stacked] with
+ * the name on a line of its own, where the score beside it would leave the name only a few
+ * letters.
+ */
+@Composable
+private fun ListingOwnerLine(
+  listing: Listing,
+  isOwnListing: Boolean,
+  stacked: Boolean,
+  modifier: Modifier,
+) {
+  val name: @Composable (Modifier) -> Unit = { nameModifier ->
+    // Names can be 60 characters long; let the name give way, not what stands beside it.
+    Text(
+      text = if (isOwnListing) "Posted by you" else listing.ownerName,
+      style = MaterialTheme.typography.labelMedium,
+      color = MaterialTheme.colorScheme.onSurface,
+      maxLines = if (stacked) 2 else 1,
+      overflow = TextOverflow.Ellipsis,
+      modifier = nameModifier,
+    )
+  }
+  val scoreAndDistance: @Composable () -> Unit = {
+    Icon(
+      imageVector = Icons.Filled.Star,
+      contentDescription = "Trust score",
+      modifier = Modifier.size(14.dp),
+      tint = blockBenchColors.pro,
+    )
+    Text(
+      text = String.format(Locale.US, "%.1f", listing.ownerTrustScore),
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      maxLines = 1,
+    )
+    Text(
+      text = "· ${formatMiles(listing.distanceMiles)}",
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      maxLines = 1,
+    )
+  }
+  if (stacked) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+      name(Modifier)
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        scoreAndDistance()
+      }
+    }
+  } else {
+    Row(
+      modifier = modifier,
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      name(Modifier.weight(1f, fill = false))
+      scoreAndDistance()
+    }
+  }
+}
+
+@Composable
+private fun ListingPrice(listing: Listing, horizontalAlignment: Alignment.Horizontal) {
+  val isJob = listing.isMicroJob
+  Column(horizontalAlignment = horizontalAlignment) {
+    Text(
+      text =
+        if (isJob) {
+          "${formatCents(listing.rateCents)} payout"
+        } else {
+          "${formatCents(listing.rateCents)}/use"
+        },
+      style = MonoFigureStyle,
+      color = MaterialTheme.colorScheme.primary,
+      maxLines = 1,
+    )
+    if (!isJob && listing.depositCents > 0L) {
+      Text(
+        text = "${formatCents(listing.depositCents)} deposit",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+      )
     }
   }
 }
@@ -625,7 +799,7 @@ fun NeighborTrustCardView(
               text = circleName.ifBlank { profile.neighborhoodLabel },
               style = MaterialTheme.typography.bodySmall,
               color = Color.White.copy(alpha = 0.78f),
-              maxLines = 1,
+              maxLines = if (isLargeText()) 2 else 1,
               overflow = TextOverflow.Ellipsis,
             )
           }
@@ -655,36 +829,36 @@ fun NeighborTrustCardView(
         }
       }
 
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-      ) {
-        TrustMetricBox(
-          label = "HANDOFFS",
-          value = totals.completedHandoffs.toString(),
-          modifier = Modifier.weight(1f),
+      val metrics =
+        listOf(
+          Triple("HANDOFFS", totals.completedHandoffs.toString(), 1f),
+          Triple("ON-TIME", "${onTimePercent(profile)}%", 1f),
+          // A little wider than the others so an eight-character code fits on small phones.
+          Triple("BLOCK CODE", inviteCode.ifBlank { "NONE" }, 1.3f),
         )
-        TrustMetricBox(
-          label = "ON-TIME",
-          value = "${onTimePercent(profile)}%",
-          modifier = Modifier.weight(1f),
-        )
-        // A little wider than the others so an eight-character code fits on small phones.
-        TrustMetricBox(
-          label = "BLOCK CODE",
-          value = inviteCode.ifBlank { "NONE" },
-          modifier = Modifier.weight(1.3f),
-        )
+      if (isLargeText()) {
+        // Three across, the labels break mid-word and the code is cut short at this text size.
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          metrics.forEach { (label, value, _) ->
+            TrustMetricBox(label = label, value = value, modifier = Modifier.fillMaxWidth())
+          }
+        }
+      } else {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          metrics.forEach { (label, value, weight) ->
+            TrustMetricBox(label = label, value = value, modifier = Modifier.weight(weight))
+          }
+        }
       }
 
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
+      ActionRow(weights = listOf(1f, 1f)) {
         Button(
           onClick = onOneTapInvite,
           enabled = inviteCode.isNotBlank(),
-          modifier = Modifier.weight(1f).testTag("one_tap_invite_button"),
+          modifier = Modifier.testTag("one_tap_invite_button"),
           colors =
             ButtonDefaults.buttonColors(
               containerColor = MaterialTheme.colorScheme.primary,
@@ -697,16 +871,16 @@ fun NeighborTrustCardView(
             modifier = Modifier.size(18.dp),
           )
           Spacer(modifier = Modifier.width(6.dp))
-          Text("1-Tap Invite", maxLines = 1)
+          Text("1-Tap Invite")
         }
 
         OutlinedButton(
           onClick = onShareTrustCard,
-          modifier = Modifier.weight(1f).testTag("share_trust_card_button"),
+          modifier = Modifier.testTag("share_trust_card_button"),
           border = BorderStroke(1.dp, Color.White.copy(alpha = 0.4f)),
           colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
         ) {
-          Text("Share Card", maxLines = 1)
+          Text("Share Card")
         }
       }
 
@@ -717,29 +891,51 @@ fun NeighborTrustCardView(
           shape = RoundedCornerShape(10.dp),
           modifier = Modifier.fillMaxWidth().testTag("trust_copy_code_row"),
         ) {
-          Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
+          val hint: @Composable (Modifier) -> Unit = { hintModifier ->
             Text(
               text = "Block invite code (tap to copy)",
-              modifier = Modifier.weight(1f),
+              modifier = hintModifier,
               style = MaterialTheme.typography.bodySmall,
               color = Color.White.copy(alpha = 0.8f),
             )
-            Text(
-              text = inviteCode,
-              style = MonoCodeStyle,
-              color = ProAmberSoft,
-              maxLines = 1,
-            )
-            Icon(
-              imageVector = Icons.Filled.ContentCopy,
-              contentDescription = "Copy invite code",
-              tint = ProAmberSoft,
-              modifier = Modifier.size(16.dp),
-            )
+          }
+          val code: @Composable () -> Unit = {
+            Row(
+              horizontalArrangement = Arrangement.spacedBy(12.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Text(
+                text = inviteCode,
+                style = MonoCodeStyle,
+                color = ProAmberSoft,
+                maxLines = 1,
+              )
+              Icon(
+                imageVector = Icons.Filled.ContentCopy,
+                contentDescription = "Copy invite code",
+                tint = ProAmberSoft,
+                modifier = Modifier.size(16.dp),
+              )
+            }
+          }
+          if (isLargeText()) {
+            // Beside the code, the hint is left a column one word wide at this text size.
+            Column(
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+              verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+              hint(Modifier)
+              code()
+            }
+          } else {
+            Row(
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+              horizontalArrangement = Arrangement.spacedBy(12.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              hint(Modifier.weight(1f))
+              code()
+            }
           }
         }
       }
@@ -822,30 +1018,57 @@ fun BlockSwitcherSheet(
         style = MaterialTheme.typography.headlineSmall,
       )
 
-      SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-        SegmentedButton(
-          selected = selectedTab == SWITCHER_TAB_BLOCKS,
-          onClick = { selectedTab = SWITCHER_TAB_BLOCKS },
-          shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
-          modifier = Modifier.testTag("switcher_tab_blocks"),
+      val tabs =
+        listOf(
+          Triple(SWITCHER_TAB_BLOCKS, "My Blocks (${circles.size})", "switcher_tab_blocks"),
+          Triple(SWITCHER_TAB_JOIN, "Join Code", "switcher_tab_join"),
+          Triple(SWITCHER_TAB_CREATE, "New Block", "switcher_tab_create"),
+        )
+      if (isLargeText()) {
+        // In thirds of the sheet, the labels break mid-word at this text size ("Block", "s").
+        Column(
+          modifier = Modifier.fillMaxWidth().selectableGroup(),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-          Text("My Blocks (${circles.size})", maxLines = 1)
+          tabs.forEach { (tab, label, tag) ->
+            val selected = selectedTab == tab
+            Surface(
+              selected = selected,
+              onClick = { selectedTab = tab },
+              shape = RoundedCornerShape(12.dp),
+              color =
+                if (selected) {
+                  MaterialTheme.colorScheme.secondaryContainer
+                } else {
+                  MaterialTheme.colorScheme.surface
+                },
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+              modifier = Modifier.fillMaxWidth().semantics { role = Role.RadioButton }.testTag(tag),
+            ) {
+              Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+              )
+            }
+          }
         }
-        SegmentedButton(
-          selected = selectedTab == SWITCHER_TAB_JOIN,
-          onClick = { selectedTab = SWITCHER_TAB_JOIN },
-          shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
-          modifier = Modifier.testTag("switcher_tab_join"),
-        ) {
-          Text("Join Code", maxLines = 1)
-        }
-        SegmentedButton(
-          selected = selectedTab == SWITCHER_TAB_CREATE,
-          onClick = { selectedTab = SWITCHER_TAB_CREATE },
-          shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
-          modifier = Modifier.testTag("switcher_tab_create"),
-        ) {
-          Text("New Block", maxLines = 1)
+      } else {
+        // These work as tabs, so the fill alone marks the open one: in thirds of the sheet, the
+        // checkmark Material adds to the selected button leaves too little room for its label.
+        // A label that still needs two lines makes all three taller, not just its own.
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+          tabs.forEachIndexed { index, (tab, label, tag) ->
+            SegmentedButton(
+              selected = selectedTab == tab,
+              onClick = { selectedTab = tab },
+              shape = SegmentedButtonDefaults.itemShape(index = index, count = tabs.size),
+              icon = {},
+              modifier = Modifier.fillMaxHeight().testTag(tag),
+            ) {
+              Text(label)
+            }
+          }
         }
       }
 
@@ -947,7 +1170,7 @@ fun BlockSwitcherSheet(
           Button(
             onClick = { onJoinCircle(joinCodeInput) },
             enabled = !isBusy && InviteCodes.isWellFormed(joinCodeInput),
-            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("switcher_join_submit"),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("switcher_join_submit"),
           ) {
             Text("Join & Switch Block")
           }
@@ -968,7 +1191,7 @@ fun BlockSwitcherSheet(
           Button(
             onClick = { onCreateCircle(newBlockName, newRadiusMiles) },
             enabled = !isBusy && newBlockName.trim().length >= 2,
-            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("switcher_create_submit"),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("switcher_create_submit"),
           ) {
             Icon(
               imageVector = Icons.Filled.Add,

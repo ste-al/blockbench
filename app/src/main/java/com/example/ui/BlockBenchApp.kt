@@ -82,6 +82,7 @@ import com.example.model.BlockCircle
 import com.example.model.EscrowWorkflow
 import com.example.model.UserProfile
 import com.example.model.dataOrNull
+import com.example.ui.components.ActionRow
 import com.example.ui.components.BlockSwitcherSheet
 import com.example.ui.components.CraftCard
 import com.example.ui.components.copyInviteCodeToClipboard
@@ -532,20 +533,11 @@ private fun ErrorRecoveryScreen(
           style = MaterialTheme.typography.bodyMedium,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-          OutlinedButton(
-            onClick = onSignOut,
-            modifier = Modifier.weight(1f).testTag("error_sign_out_button"),
-          ) {
+        ActionRow(weights = listOf(1f, 1f)) {
+          OutlinedButton(onClick = onSignOut, modifier = Modifier.testTag("error_sign_out_button")) {
             Text(stringResource(id = R.string.sign_out))
           }
-          Button(
-            onClick = onRetry,
-            modifier = Modifier.weight(1f).testTag("error_retry_button"),
-          ) {
+          Button(onClick = onRetry, modifier = Modifier.testTag("error_retry_button")) {
             Text(stringResource(id = R.string.retry_sync))
           }
         }
