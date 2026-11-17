@@ -96,6 +96,8 @@ npm run test:android               # everything in the first line, plus the test
   app and the rules drifting apart.
 - Screen tests render the Compose screens under Robolectric. `AccessibleNamesTest` goes through
   all of them and fails when a control has nothing a screen reader could call it by.
+- `ThemeContrastTest` holds both colour schemes to the WCAG contrast minimums for every pairing
+  the app draws. Run it after touching `Color.kt`.
 - `AppShellSmokeTest` walks through the whole app against the emulators (onboarding, posting a
   listing, the three tabs, signing out) to catch wiring mistakes the focused tests cannot see.
 
