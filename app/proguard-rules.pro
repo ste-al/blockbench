@@ -19,3 +19,10 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Firestore maps documents onto the model classes by reflection (DocumentSnapshot.toObject), so
+# their names, no-argument constructors and fields have to survive shrinking. Code shrinking is
+# currently off (isMinifyEnabled = false in app/build.gradle.kts); these rules are here so that
+# switching it on does not silently break every read.
+-keepattributes Signature,*Annotation*
+-keep class com.example.model.** { *; }

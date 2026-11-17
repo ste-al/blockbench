@@ -9,11 +9,15 @@ val LinenSurface = Color(0xFFF3EDE2)
 val LinenDeep = Color(0xFFE9E0D1)
 val LinenDeepest = Color(0xFFE0D5C2)
 val HairlineTaupe = Color(0xFFE3D9C8)
-// Boundaries of interactive controls (text fields, outlined buttons) need 3:1 against the
-// surface to be perceivable; the hairline above is only for decorative dividers and card edges.
-val OutlineTaupe = Color(0xFF8C8273)
+// Boundaries of interactive controls (text fields, outlined buttons, the thumb of a switch that
+// is off) need 3:1 against whatever they sit on, up to the darkest linen; the hairline above is
+// only for decorative dividers and card edges.
+val OutlineTaupe = Color(0xFF7F7567)
 
-val WorkshopTerracotta = Color(0xFFB84A27)
+// The accent doubles as the colour of text buttons and figures, so it has to keep 4.5:1 on every
+// surface those appear on, the linen of the cards and of the dialogs included. ThemeContrastTest
+// holds the palette to this.
+val WorkshopTerracotta = Color(0xFFA74323)
 val TerracottaContainer = Color(0xFFFBE7DF)
 val OnTerracottaContainer = Color(0xFF5D1D09)
 
@@ -37,8 +41,8 @@ val ErrorSoft = Color(0xFFF9DEDC)
 val DarkWorkshopBg = Color(0xFF161411)
 val DarkWorkshopCard = Color(0xFF211E19)
 val DarkWorkshopLinen = Color(0xFF2B2720)
+val DarkLinenHigh = Color(0xFF332E27)
 val DarkHairline = Color(0xFF3E372D)
-val DarkLinenHighest = Color(0xFF4A4237)
 val DarkOutline = Color(0xFF8F8577)
 val DarkTerracotta = Color(0xFFE58261)
 val DarkTerracottaContainer = Color(0xFF5C2412)
@@ -47,7 +51,7 @@ val DarkPineContainer = Color(0xFF1B3A31)
 val DarkEscrowSage = Color(0xFF86D3A8)
 val DarkEscrowSageContainer = Color(0xFF1D3A2C)
 val DarkProAmber = Color(0xFFF0B45A)
-val DarkProAmberContainer = Color(0xFF46330F)
+val DarkProAmberContainer = Color(0xFF43300E)
 val DarkInkPrimary = Color(0xFFF5EFE6)
 val DarkInkMuted = Color(0xFFB7ADA0)
 val DarkError = Color(0xFFFFB4AB)

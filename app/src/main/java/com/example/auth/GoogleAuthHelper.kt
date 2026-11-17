@@ -21,8 +21,10 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -30,8 +32,17 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val AUTH_TAG = "BlockBenchAuth"
+private const val CLEAR_CREDENTIAL_STATE_TIMEOUT_MS = 10_000L
+
+/**
+ * Set when the user signs out. The sign-in screen tries a silent sign-in whenever it appears,
+ * which right after an explicit sign-out would immediately put Google's account sheet back in
+ * front of the person who just asked to leave. Cleared by the next deliberate sign-in.
+ */
+private val signedOutThisSession = AtomicBoolean(false)
 
 sealed interface GoogleSignInResult {
   data object Success : GoogleSignInResult
@@ -74,6 +85,7 @@ private tailrec fun Context.findActivity(): Activity? =
  */
 suspend fun trySilentGoogleSignIn(context: Context, credentialManager: CredentialManager): Boolean {
   if (Firebase.auth.currentUser != null) return true
+  if (signedOutThisSession.get()) return false
   val clientId = context.googleWebClientId() ?: return false
 
   val googleIdOption =
@@ -115,6 +127,7 @@ suspend fun signInWithGoogle(
   return try {
     val result = credentialManager.getCredential(activity, request)
     if (signInToFirebase(result.credential)) {
+      signedOutThisSession.set(false)
       GoogleSignInResult.Success
     } else {
       GoogleSignInResult.Failure("Google returned an unexpected credential. Please try again.")
@@ -145,19 +158,27 @@ private suspend fun signInToFirebase(credential: Credential): Boolean {
 }
 
 /**
- * Signs out of Firebase and clears the Credential Manager state so the next launch does not
- * silently sign the same account back in. Runs to completion even if [scope] is cancelled by the
- * UI leaving composition as a result of the sign-out itself.
+ * Signs out of Firebase right away, then asks the credential providers to forget which account
+ * this app was using, so that the next launch does not silently sign the same account back in.
+ *
+ * The second step is best effort. Signing out must not fail, or wait, because a credential
+ * provider is missing or slow to answer, so it comes second, its failures are only logged and it
+ * is given up on after a while. It is started before this function returns and is not cancelled
+ * with [scope]: the sign-out itself takes the calling screen, and with it that scope, away.
  */
 fun signOutUser(credentialManager: CredentialManager, scope: CoroutineScope) {
-  scope.launch {
+  signedOutThisSession.set(true)
+  Firebase.auth.signOut()
+  scope.launch(start = CoroutineStart.UNDISPATCHED) {
     withContext(NonCancellable) {
       try {
-        credentialManager.clearCredentialState(ClearCredentialStateRequest())
+        val cleared =
+          withTimeoutOrNull(CLEAR_CREDENTIAL_STATE_TIMEOUT_MS) {
+            credentialManager.clearCredentialState(ClearCredentialStateRequest())
+          }
+        if (cleared == null) Log.w(AUTH_TAG, "Clearing the credential state timed out")
       } catch (e: Exception) {
         Log.w(AUTH_TAG, "Failed to clear credential state: ${e.message}")
-      } finally {
-        Firebase.auth.signOut()
       }
     }
   }

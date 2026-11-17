@@ -1,0 +1,21 @@
+{
+  "name": "blockbench-firebase-tooling",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Firebase emulators and the security-rules test suite for the BlockBench Android app.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "emulators": "firebase emulators:start --only firestore,auth --project demo-no-project",
+    "test": "firebase emulators:exec --only firestore --project demo-no-project \"node --test firestore.test.js\"",
+    "test:rules": "node --test firestore.test.js",
+    "test:android": "firebase emulators:exec --only firestore,auth --project demo-no-project \"./gradlew :app:testDebugUnitTest\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "firebase": "^12.19.0",
+    "firebase-tools": "^15.36.0"
+  }
+}

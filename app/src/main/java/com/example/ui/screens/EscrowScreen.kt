@@ -59,6 +59,8 @@ import com.example.model.EscrowFeeBreakdown
 import com.example.model.EscrowWorkflow
 import com.example.model.UiState
 import com.example.model.dataOrNull
+import com.example.ui.components.ActionRow
+import com.example.ui.components.BadgeRow
 import com.example.ui.components.CraftBadge
 import com.example.ui.components.CraftCard
 import com.example.ui.components.LedgerRow
@@ -433,10 +435,14 @@ private fun BookingEscrowCard(
 
   CraftCard(modifier = Modifier.fillMaxWidth().testTag("booking_card_${booking.id}")) {
     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+      BadgeRow(
+        trailing = {
+          CraftBadge(
+            text = booking.status.replace("_", " ").uppercase(),
+            containerColor = statusBadgeColor,
+            contentColor = statusTextColor,
+          )
+        }
       ) {
         CraftBadge(
           text =
@@ -453,11 +459,6 @@ private fun BookingEscrowCard(
             } else {
               MaterialTheme.colorScheme.onSecondaryContainer
             },
-        )
-        CraftBadge(
-          text = booking.status.replace("_", " ").uppercase(),
-          containerColor = statusBadgeColor,
-          contentColor = statusTextColor,
         )
       }
 
@@ -524,23 +525,20 @@ private fun BookingEscrowCard(
       when (booking.status) {
         Booking.STATUS_REQUESTED ->
           if (Booking.STATUS_ESCROW_HELD in allowed) {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
+            ActionRow(weights = listOf(1f, 1.4f)) {
               OutlinedButton(
                 onClick = onRequestCancel,
                 enabled = !isBusy,
-                modifier = Modifier.weight(1f).testTag("cancel_booking_${booking.id}"),
+                modifier = Modifier.testTag("cancel_booking_${booking.id}"),
               ) {
-                Text("Decline", maxLines = 1)
+                Text("Decline")
               }
               Button(
                 onClick = { onAdvance(Booking.STATUS_ESCROW_HELD) },
                 enabled = !isBusy,
-                modifier = Modifier.weight(1.4f).testTag("lock_escrow_${booking.id}"),
+                modifier = Modifier.testTag("lock_escrow_${booking.id}"),
               ) {
-                Text("Approve & Lock", maxLines = 1)
+                Text("Approve & Lock")
               }
             }
           } else {
@@ -557,23 +555,20 @@ private fun BookingEscrowCard(
             }
           }
         Booking.STATUS_ESCROW_HELD ->
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
+          ActionRow(weights = listOf(1f, 1.4f)) {
             OutlinedButton(
               onClick = onRequestCancel,
               enabled = !isBusy,
-              modifier = Modifier.weight(1f).testTag("refund_booking_${booking.id}"),
+              modifier = Modifier.testTag("refund_booking_${booking.id}"),
             ) {
-              Text("Refund", maxLines = 1)
+              Text("Refund")
             }
             Button(
               onClick = { onAdvance(Booking.STATUS_IN_PROGRESS) },
               enabled = !isBusy,
-              modifier = Modifier.weight(1.4f).testTag("start_handoff_${booking.id}"),
+              modifier = Modifier.testTag("start_handoff_${booking.id}"),
             ) {
-              Text("Start Handoff", maxLines = 1)
+              Text("Start Handoff")
             }
           }
         Booking.STATUS_IN_PROGRESS ->

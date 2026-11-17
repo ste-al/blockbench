@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -80,12 +81,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.model.BlockCircle
+import com.example.model.Booking
 import com.example.model.CraftCategories
 import com.example.model.EscrowFeeBreakdown
 import com.example.model.Listing
@@ -96,15 +101,19 @@ import com.example.model.UserProfile
 import com.example.model.dataOrNull
 import com.example.ui.FeedFilter
 import com.example.ui.FeedFiltersState
+import com.example.ui.components.ActionRow
 import com.example.ui.components.CraftCard
 import com.example.ui.components.EscrowBreakdownCard
 import com.example.ui.components.ListingCraftCard
 import com.example.ui.components.ListingPhotoCodec
 import com.example.ui.components.ListingThumbnail
+import com.example.ui.components.circleSummary
 import com.example.ui.components.copyInviteCodeToClipboard
 import com.example.ui.components.formatCents
 import com.example.ui.components.formatMiles
+import com.example.ui.components.isLargeText
 import com.example.ui.components.shareNeighborhoodInvite
+import com.example.ui.components.spokenMiles
 import com.example.ui.components.toTenthsOfAMile
 import com.example.ui.theme.MonoFigureStyle
 import com.example.ui.theme.blockBenchColors
@@ -179,16 +188,13 @@ fun FeedScreen(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
+        val largeText = isLargeText()
+        val blockSwitcher: @Composable (Modifier) -> Unit = { switcherModifier ->
           Surface(
             onClick = onOpenBlockSwitcher,
             color = MaterialTheme.colorScheme.surface,
             shape = RoundedCornerShape(10.dp),
-            modifier = Modifier.weight(1f).testTag("feed_block_switcher_button"),
+            modifier = switcherModifier.testTag("feed_block_switcher_button"),
           ) {
             Column(modifier = Modifier.padding(end = 6.dp, top = 2.dp, bottom = 2.dp)) {
               Row(
@@ -198,7 +204,7 @@ fun FeedScreen(
                 Text(
                   text = activeCircle.name,
                   style = MaterialTheme.typography.headlineSmall,
-                  maxLines = 1,
+                  maxLines = if (largeText) 2 else 1,
                   overflow = TextOverflow.Ellipsis,
                   modifier = Modifier.weight(1f, fill = false),
                 )
@@ -209,16 +215,17 @@ fun FeedScreen(
                 )
               }
               Text(
-                text =
-                  "${activeCircle.memberUids.size} neighbors · ${formatMiles(activeCircle.radiusMiles)} · Code ${activeCircle.inviteCode}",
+                text = circleSummary(activeCircle),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+                // The invite code is in this line; at large text sizes it takes a second one.
+                maxLines = if (largeText) 2 else 1,
                 overflow = TextOverflow.Ellipsis,
               )
             }
           }
-
+        }
+        val headerActions: @Composable () -> Unit = {
           Row(
             horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -278,7 +285,25 @@ fun FeedScreen(
             }
           }
         }
+        if (largeText) {
+          // Beside the buttons, the block's name and its invite code are cut down to a few
+          // letters at this text size.
+          Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            blockSwitcher(Modifier.fillMaxWidth())
+            headerActions()
+          }
+        } else {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            blockSwitcher(Modifier.weight(1f))
+            headerActions()
+          }
+        }
 
+        val searchLabel = stringResource(id = R.string.search_listings_label)
         OutlinedTextField(
           value = filters.searchQuery,
           onValueChange = onSearchQueryChange,
@@ -288,7 +313,11 @@ fun FeedScreen(
           },
           singleLine = true,
           shape = RoundedCornerShape(14.dp),
-          modifier = Modifier.fillMaxWidth().testTag("feed_search_input"),
+          // The placeholder is all that names this field, and it goes away with the first letter.
+          modifier =
+            Modifier.fillMaxWidth().testTag("feed_search_input").semantics {
+              contentDescription = searchLabel
+            },
         )
 
         Row(
@@ -814,7 +843,11 @@ private fun ListingEditorSheet(
           value = distanceMiles.toFloat(),
           onValueChange = { distanceMiles = it.toTenthsOfAMile() },
           valueRange = 0.1f..5.0f,
-          modifier = Modifier.testTag("create_distance_slider"),
+          modifier =
+            Modifier.testTag("create_distance_slider").semantics {
+              contentDescription = "Distance on Block"
+              stateDescription = spokenMiles(distanceMiles)
+            },
         )
       }
 
@@ -845,7 +878,10 @@ private fun ListingEditorSheet(
         Switch(
           checked = instantPickup,
           onCheckedChange = { instantPickup = it },
-          modifier = Modifier.testTag("create_instant_switch"),
+          modifier =
+            Modifier.testTag("create_instant_switch").semantics {
+              contentDescription = "Instant Porch Pickup / Claim"
+            },
         )
       }
 
@@ -912,7 +948,7 @@ private fun ListingEditorSheet(
           )
         },
         enabled = validationHint == null && !isBusy && !isReadingPhoto,
-        modifier = Modifier.fillMaxWidth().height(52.dp).testTag("publish_listing_button"),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("publish_listing_button"),
       ) {
         Text(
           when {
@@ -943,6 +979,10 @@ private fun ListingDetailSheet(
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   var notes by remember { mutableStateOf("") }
   var showDeleteConfirm by remember { mutableStateOf(false) }
+  // The listing turns "reserved" the instant our own booking commits, a moment before the sheet
+  // is told to close. Keep the form up for that moment rather than flashing "a neighbor has this
+  // reserved" at the person who just reserved it.
+  var requestSent by remember { mutableStateOf(false) }
   val isJob = listing.isMicroJob
   val breakdown = EscrowFeeBreakdown.calculate(listing.rateCents, listing.depositCents)
   // A booking in flight holds the listing: it can be edited, but not paused or deleted.
@@ -1009,14 +1049,11 @@ private fun ListingDetailSheet(
               }
           )
         }
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        ActionRow(weights = listOf(1f, 1f, 0f)) {
           OutlinedButton(
             onClick = onEdit,
             enabled = !isBusy,
-            modifier = Modifier.weight(1f).testTag("edit_listing_button"),
+            modifier = Modifier.testTag("edit_listing_button"),
           ) {
             Icon(
               imageVector = Icons.Filled.Edit,
@@ -1024,12 +1061,12 @@ private fun ListingDetailSheet(
               modifier = Modifier.size(16.dp),
             )
             Spacer(modifier = Modifier.width(4.dp))
-            Text("Edit", maxLines = 1)
+            Text("Edit")
           }
           OutlinedButton(
             onClick = onTogglePause,
             enabled = !isBusy && !isHeldByBooking,
-            modifier = Modifier.weight(1f).testTag("toggle_pause_listing_button"),
+            modifier = Modifier.testTag("toggle_pause_listing_button"),
           ) {
             Text(
               text =
@@ -1037,8 +1074,7 @@ private fun ListingDetailSheet(
                   Listing.STATUS_AVAILABLE -> "Pause"
                   Listing.STATUS_PAUSED -> "Resume"
                   else -> "Clear"
-                },
-              maxLines = 1,
+                }
             )
           }
           TextButton(
@@ -1050,19 +1086,23 @@ private fun ListingDetailSheet(
             Text("Delete")
           }
         }
-      } else if (listing.status == Listing.STATUS_AVAILABLE) {
+      } else if (listing.status == Listing.STATUS_AVAILABLE || (requestSent && isBusy)) {
         OutlinedTextField(
           value = notes,
-          onValueChange = { notes = it.take(250) },
+          onValueChange = { notes = it.take(Booking.MAX_NOTES_LENGTH) },
           label = { Text("Pickup / Arrival Note") },
           placeholder = { Text("e.g. Can swing by at 5:30 PM today") },
           singleLine = true,
           modifier = Modifier.fillMaxWidth().testTag("booking_notes_input"),
         )
         Button(
-          onClick = { onBook(notes) },
+          onClick = {
+            requestSent = true
+            onBook(notes)
+          },
           enabled = !isBusy,
-          modifier = Modifier.fillMaxWidth().height(52.dp).testTag("confirm_escrow_book_button"),
+          modifier =
+            Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("confirm_escrow_book_button"),
         ) {
           Text(
             text =

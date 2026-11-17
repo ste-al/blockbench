@@ -42,6 +42,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
@@ -51,6 +53,7 @@ import com.example.model.CraftCategories
 import com.example.model.EscrowFeeBreakdown
 import com.example.model.Listing
 import com.example.model.UserProfile
+import com.example.ui.components.ActionRow
 import com.example.ui.components.BlockRadiusSlider
 import com.example.ui.components.CraftCard
 import com.example.ui.components.LedgerRow
@@ -58,6 +61,7 @@ import com.example.ui.components.NeighborTrustCardView
 import com.example.ui.components.copyInviteCodeToClipboard
 import com.example.ui.components.formatCents
 import com.example.ui.components.formatMiles
+import com.example.ui.components.neighborsLabel
 import com.example.ui.components.shareNeighborhoodInvite
 import com.example.ui.components.shareTrustCard
 import com.example.ui.theme.blockBenchColors
@@ -88,8 +92,9 @@ fun TrustHubScreen(
   val context = LocalContext.current
   val brand = blockBenchColors
 
-  // Local edits; re-seeded whenever the saved value changes.
-  var proEnabled by remember(profile.proAlertsEnabled) { mutableStateOf(profile.proAlertsEnabled) }
+  // The switch always shows what is saved: if a save fails it must not be left looking "on".
+  val proEnabled = profile.proAlertsEnabled
+  // Unsaved edits to the rules; re-seeded whenever the saved value changes.
   var alertRadius by
     remember(profile.alertRadiusMiles) { mutableDoubleStateOf(profile.alertRadiusMiles) }
   var alertCats by remember(profile.alertCategories) { mutableStateOf(profile.alertCategories) }
@@ -199,14 +204,15 @@ fun TrustHubScreen(
                 )
               }
             }
+            val proAlertsTitle = stringResource(id = R.string.pro_alerts_title)
             Switch(
               checked = proEnabled,
-              onCheckedChange = { checked ->
-                proEnabled = checked
-                onSaveProAlerts(checked, alertRadius, alertCats)
-              },
+              onCheckedChange = { checked -> onSaveProAlerts(checked, alertRadius, alertCats) },
               enabled = !isBusy,
-              modifier = Modifier.testTag("pro_alerts_switch"),
+              modifier =
+                Modifier.testTag("pro_alerts_switch").semantics {
+                  contentDescription = proAlertsTitle
+                },
             )
           }
 
@@ -246,10 +252,7 @@ fun TrustHubScreen(
           // The one button activates the subscription when it is off and saves edited rules when
           // it is on. (It used to save "off" again while offering to "Activate".)
           Button(
-            onClick = {
-              proEnabled = true
-              onSaveProAlerts(true, alertRadius, alertCats)
-            },
+            onClick = { onSaveProAlerts(true, alertRadius, alertCats) },
             enabled = !isBusy && (!proEnabled || hasUnsavedRuleChanges),
             modifier = Modifier.fillMaxWidth().testTag("save_pro_alerts_button"),
           ) {
@@ -323,19 +326,16 @@ fun TrustHubScreen(
           Text(text = "Neighborhood Block & Account", style = MaterialTheme.typography.titleMedium)
           Text(
             text =
-              "Active block: ${activeCircle.name} (${activeCircle.memberUids.size} neighbors). " +
+              "Active block: ${activeCircle.name} (${neighborsLabel(activeCircle.memberUids.size)}). " +
                 "You belong to $circlesCount " +
                 if (circlesCount == 1) "block." else "blocks.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
+          ActionRow(weights = listOf(1f, 0f)) {
             OutlinedButton(
               onClick = onOpenBlockSwitcher,
-              modifier = Modifier.weight(1f).testTag("switch_block_button"),
+              modifier = Modifier.testTag("switch_block_button"),
             ) {
               Icon(
                 imageVector = Icons.Filled.SwapHoriz,

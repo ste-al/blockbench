@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer push to the same branch or pull request supersedes the run in progress.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rules:
+    name: Security rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # The Firestore emulator is a Java program.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Cache Firebase emulators
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ hashFiles('package-lock.json') }}
+
+      - run: npm ci
+
+      - name: Rules tests against the Firestore emulator
+        run: npm test
+
+  android:
+    name: Android build and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Cache Firebase emulators
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ hashFiles('package-lock.json') }}
+
+      - run: npm ci
+
+      # Runs inside `firebase emulators:exec`, which also makes the repository tests mandatory:
+      # outside of it they skip themselves when no emulator is listening.
+      - name: Unit, screen and repository tests (Firestore + Auth emulators)
+        run: npm run test:android
+
+      # No google-services.json and no keystore here: this is the "clean checkout" build.
+      - name: Assemble and lint
+        run: ./gradlew :app:assembleDebug :app:lintDebug
+
+      - name: Upload reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-reports
+          path: |
+            app/build/reports
+            firestore-debug.log
+          if-no-files-found: ignore

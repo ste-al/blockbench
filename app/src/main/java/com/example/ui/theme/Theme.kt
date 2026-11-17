@@ -14,7 +14,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
-private val LightColorScheme =
+internal val LightColorScheme =
   lightColorScheme(
     primary = WorkshopTerracotta,
     onPrimary = Color.White,
@@ -52,7 +52,7 @@ private val LightColorScheme =
     onErrorContainer = ErrorCrimson,
   )
 
-private val DarkColorScheme =
+internal val DarkColorScheme =
   darkColorScheme(
     primary = DarkTerracotta,
     onPrimary = DarkWorkshopBg,
@@ -80,8 +80,8 @@ private val DarkColorScheme =
     surfaceContainerLowest = DarkWorkshopBg,
     surfaceContainerLow = DarkWorkshopCard,
     surfaceContainer = DarkWorkshopLinen,
-    surfaceContainerHigh = DarkHairline,
-    surfaceContainerHighest = DarkLinenHighest,
+    surfaceContainerHigh = DarkLinenHigh,
+    surfaceContainerHighest = DarkHairline,
     outline = DarkOutline,
     outlineVariant = DarkHairline,
     error = DarkError,
@@ -107,7 +107,7 @@ data class BlockBenchExtendedColors(
   val onProContainer: Color,
 )
 
-private val LightExtendedColors =
+internal val LightExtendedColors =
   BlockBenchExtendedColors(
     escrow = EscrowSage,
     escrowContainer = EscrowSageSoft,
@@ -117,7 +117,7 @@ private val LightExtendedColors =
     onProContainer = ProAmberInk,
   )
 
-private val DarkExtendedColors =
+internal val DarkExtendedColors =
   BlockBenchExtendedColors(
     escrow = DarkEscrowSage,
     escrowContainer = DarkEscrowSageContainer,
