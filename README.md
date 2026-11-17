@@ -86,8 +86,8 @@ and `KEY_PASSWORD`.
 ./gradlew :app:testDebugUnitTest   # unit and screen tests; emulator tests are skipped
 npm ci                             # once: Firebase emulators and the rules test library
 npm test                           # security-rules tests against the Firestore emulator
-npm run test:android               # everything in the first line, plus the repository
-                                   # tests against the Firestore and Auth emulators
+npm run test:android               # everything in the first line, plus the tests that
+                                   # need the Firestore and Auth emulators
 ```
 
 - `firestore.test.js` exercises every allow path of `firestore.rules` and the attacks they exist
@@ -95,6 +95,8 @@ npm run test:android               # everything in the first line, plus the repo
 - `BlockBenchRepositoryTest` drives the real Firebase SDK through those rules, so it catches the
   app and the rules drifting apart.
 - Screen tests render the Compose screens under Robolectric.
+- `AppShellSmokeTest` walks through the whole app against the emulators (onboarding, posting a
+  listing, the three tabs, signing out) to catch wiring mistakes the focused tests cannot see.
 
 `npm run emulators` starts the emulators for manual use (`npm run test:rules` then runs the rules
 tests against them). After editing `firestore.rules`, restart them before running the Android
