@@ -54,6 +54,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModel
@@ -330,10 +332,13 @@ private fun BlockShell(
       contentWindowInsets = WindowInsets.safeDrawing,
       floatingActionButton = {
         if (currentDestination.isOn(ROUTE_FEED)) {
+          val postLabel = stringResource(id = R.string.post_listing_fab)
           ExtendedFloatingActionButton(
             onClick = { showCreateSheet = true },
-            icon = { Icon(imageVector = Icons.Filled.Add, contentDescription = null) },
-            text = { Text(stringResource(id = R.string.post_listing_fab)) },
+            // The button takes its name from the icon: Material drops the semantics of the text,
+            // which is not there when an extended button is collapsed.
+            icon = { Icon(imageVector = Icons.Filled.Add, contentDescription = postLabel) },
+            text = { Text(postLabel) },
             containerColor = MaterialTheme.colorScheme.primary,
             contentColor = MaterialTheme.colorScheme.onPrimary,
             modifier = Modifier.testTag("post_listing_fab"),
@@ -350,7 +355,7 @@ private fun BlockShell(
                 onClick = { navigateToRoute(item.route) },
                 icon = { NavItemIcon(item = item, selected = selected) },
                 label = { Text(item.label) },
-                modifier = Modifier.testTag("nav_item_${item.route}"),
+                modifier = Modifier.testTag("nav_item_${item.route}").announcingBadge(item),
               )
             }
           }
@@ -369,7 +374,7 @@ private fun BlockShell(
                 onClick = { navigateToRoute(item.route) },
                 icon = { NavItemIcon(item = item, selected = selected) },
                 label = { Text(item.label) },
-                modifier = Modifier.testTag("rail_item_${item.route}"),
+                modifier = Modifier.testTag("rail_item_${item.route}").announcingBadge(item),
               )
             }
           }
@@ -471,18 +476,28 @@ private fun BlockShell(
 private fun NavDestination?.isOn(route: String): Boolean =
   this?.hierarchy?.any { it.route == route } == true
 
+/**
+ * Says the badge count along with the tab's name. Material drops the semantics of a tab's icon,
+ * badge included, whenever the tab has a label, so described on the icon the count would be seen
+ * but never announced; it has to come from the tab itself.
+ */
+private fun Modifier.announcingBadge(item: NavItem): Modifier =
+  if (item.badgeCount > 0) {
+    semantics { contentDescription = "${item.label}, ${item.badgeCount} waiting for you" }
+  } else {
+    this
+  }
+
 @Composable
 private fun NavItemIcon(item: NavItem, selected: Boolean) {
   val icon = if (selected) item.selectedIcon else item.unselectedIcon
+  // The icon is decoration next to the label that names the tab.
   if (item.badgeCount > 0) {
     BadgedBox(badge = { Badge { Text(item.badgeCount.coerceAtMost(99).toString()) } }) {
-      Icon(
-        imageVector = icon,
-        contentDescription = "${item.label}, ${item.badgeCount} waiting for you",
-      )
+      Icon(imageVector = icon, contentDescription = null)
     }
   } else {
-    Icon(imageVector = icon, contentDescription = item.label)
+    Icon(imageVector = icon, contentDescription = null)
   }
 }
 

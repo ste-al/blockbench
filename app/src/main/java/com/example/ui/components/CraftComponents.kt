@@ -72,6 +72,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -94,6 +97,9 @@ import kotlin.math.roundToInt
 fun formatCents(cents: Long): String = String.format(Locale.US, "$%,.2f", cents / 100.0)
 
 fun formatMiles(miles: Double): String = String.format(Locale.US, "%.1f mi", miles)
+
+/** [formatMiles] for a screen reader, which would read "mi" out as a word. */
+fun spokenMiles(miles: Double): String = String.format(Locale.US, "%.1f miles", miles)
 
 fun neighborsLabel(count: Int): String = if (count == 1) "1 neighbor" else "$count neighbors"
 
@@ -1031,6 +1037,12 @@ fun BlockRadiusSlider(
       onValueChange = { onRadiusChange(it.toTenthsOfAMile()) },
       valueRange = 0.5f..5.0f,
       steps = 8,
+      // On its own a slider is announced as "slider, 22 percent".
+      modifier =
+        Modifier.semantics {
+          contentDescription = label
+          stateDescription = spokenMiles(radiusMiles)
+        },
     )
   }
 }

@@ -42,6 +42,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
@@ -201,11 +203,15 @@ fun TrustHubScreen(
                 )
               }
             }
+            val proAlertsTitle = stringResource(id = R.string.pro_alerts_title)
             Switch(
               checked = proEnabled,
               onCheckedChange = { checked -> onSaveProAlerts(checked, alertRadius, alertCats) },
               enabled = !isBusy,
-              modifier = Modifier.testTag("pro_alerts_switch"),
+              modifier =
+                Modifier.testTag("pro_alerts_switch").semantics {
+                  contentDescription = proAlertsTitle
+                },
             )
           }
 

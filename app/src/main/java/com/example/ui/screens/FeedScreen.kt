@@ -80,6 +80,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -107,6 +110,7 @@ import com.example.ui.components.copyInviteCodeToClipboard
 import com.example.ui.components.formatCents
 import com.example.ui.components.formatMiles
 import com.example.ui.components.shareNeighborhoodInvite
+import com.example.ui.components.spokenMiles
 import com.example.ui.components.toTenthsOfAMile
 import com.example.ui.theme.MonoFigureStyle
 import com.example.ui.theme.blockBenchColors
@@ -280,6 +284,7 @@ fun FeedScreen(
           }
         }
 
+        val searchLabel = stringResource(id = R.string.search_listings_label)
         OutlinedTextField(
           value = filters.searchQuery,
           onValueChange = onSearchQueryChange,
@@ -289,7 +294,11 @@ fun FeedScreen(
           },
           singleLine = true,
           shape = RoundedCornerShape(14.dp),
-          modifier = Modifier.fillMaxWidth().testTag("feed_search_input"),
+          // The placeholder is all that names this field, and it goes away with the first letter.
+          modifier =
+            Modifier.fillMaxWidth().testTag("feed_search_input").semantics {
+              contentDescription = searchLabel
+            },
         )
 
         Row(
@@ -815,7 +824,11 @@ private fun ListingEditorSheet(
           value = distanceMiles.toFloat(),
           onValueChange = { distanceMiles = it.toTenthsOfAMile() },
           valueRange = 0.1f..5.0f,
-          modifier = Modifier.testTag("create_distance_slider"),
+          modifier =
+            Modifier.testTag("create_distance_slider").semantics {
+              contentDescription = "Distance on Block"
+              stateDescription = spokenMiles(distanceMiles)
+            },
         )
       }
 
@@ -846,7 +859,10 @@ private fun ListingEditorSheet(
         Switch(
           checked = instantPickup,
           onCheckedChange = { instantPickup = it },
-          modifier = Modifier.testTag("create_instant_switch"),
+          modifier =
+            Modifier.testTag("create_instant_switch").semantics {
+              contentDescription = "Instant Porch Pickup / Claim"
+            },
         )
       }
 

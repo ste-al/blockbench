@@ -2,12 +2,19 @@ package com.example.ui.screens
 
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
+import androidx.compose.ui.test.junit4.ComposeTestRule
 import com.example.model.BlockCircle
 import com.example.model.Booking
 import com.example.model.Listing
 import com.example.model.UserProfile
 import com.example.ui.theme.BlockBenchTheme
+import org.junit.Assert.assertEquals
 
 /**
  * Screen tests run the real composables under Robolectric. The tall, phone-wide configuration
@@ -21,6 +28,36 @@ internal const val NEIGHBOR = "uid_bob"
 internal fun ComposeContentTestRule.setThemedContent(content: @Composable () -> Unit) {
   setContent { BlockBenchTheme(darkTheme = false) { Surface { content() } } }
 }
+
+/**
+ * Fails when something on screen that a person can act on has nothing a screen reader could call
+ * it by: no text and no content description, of its own or merged in from what it contains.
+ *
+ * Material drops the semantics of some slots (a tab's icon next to its label, the text of an
+ * extended floating action button), so a control can look labelled and still be announced as a
+ * bare "button". Nothing short of a check like this one notices.
+ */
+internal fun ComposeTestRule.assertEveryControlHasAName() {
+  val unnamed =
+    onAllNodes(isRoot())
+      .fetchSemanticsNodes()
+      .flatMap { it.selfAndDescendants() }
+      .filter { it.isControl && it.accessibleName.isBlank() }
+      .map { it.config.getOrNull(SemanticsProperties.TestTag) ?: "untagged, at ${it.boundsInRoot}" }
+  assertEquals("Controls a screen reader has no name for", emptyList<String>(), unnamed)
+}
+
+private fun SemanticsNode.selfAndDescendants(): List<SemanticsNode> =
+  listOf(this) + children.flatMap { it.selfAndDescendants() }
+
+private val SemanticsNode.isControl: Boolean
+  get() = SemanticsActions.OnClick in config || SemanticsActions.SetProgress in config
+
+private val SemanticsNode.accessibleName: String
+  get() =
+    (config.getOrNull(SemanticsProperties.ContentDescription).orEmpty() +
+        config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text })
+      .joinToString(" ")
 
 internal val sampleCircle =
   BlockCircle(

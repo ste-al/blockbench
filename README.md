@@ -94,7 +94,8 @@ npm run test:android               # everything in the first line, plus the test
   to stop.
 - `BlockBenchRepositoryTest` drives the real Firebase SDK through those rules, so it catches the
   app and the rules drifting apart.
-- Screen tests render the Compose screens under Robolectric.
+- Screen tests render the Compose screens under Robolectric. `AccessibleNamesTest` goes through
+  all of them and fails when a control has nothing a screen reader could call it by.
 - `AppShellSmokeTest` walks through the whole app against the emulators (onboarding, posting a
   listing, the three tabs, signing out) to catch wiring mistakes the focused tests cannot see.
 

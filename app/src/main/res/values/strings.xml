@@ -25,6 +25,7 @@
     <!-- Feed & Listings -->
     <string name="post_listing_fab">Post Tool or Job</string>
     <string name="search_listings_hint">Search pressure washer, ladder, latch fix…</string>
+    <string name="search_listings_label">Search listings</string>
 
     <!-- Escrow & Monetization -->
     <string name="escrow_fee_note">5% transparent micro-escrow fee protects deposits and guarantees instant payout release.</string>
