@@ -52,7 +52,7 @@ import kotlinx.coroutines.tasks.await
 class BlockBenchRepository(
   private val db: FirebaseFirestore,
   private val auth: FirebaseAuth = Firebase.auth,
-) {
+) : BlockBenchDataSource {
 
   private val users
     get() = db.collection("users")
@@ -74,25 +74,21 @@ class BlockBenchRepository(
 
   // ------------------------------------------------------------ user profile
 
-  fun observeUserProfile(uid: String): Flow<UserProfile?> =
+  override fun observeUserProfile(uid: String): Flow<UserProfile?> =
     users
       .document(uid)
       .snapshots()
       .map { snapshot -> snapshot.toModelOrNull<UserProfile>() }
       .logFailures(OperationType.GET, "users/$uid", uid)
 
-  /** Creates the signed-in user's profile on first launch; returns the existing one otherwise. */
-  suspend fun ensureUserProfile(
-    displayName: String,
-    neighborhoodLabel: String = DEFAULT_NEIGHBORHOOD_LABEL,
-  ): UserProfile {
+  override suspend fun ensureUserProfile(displayName: String): UserProfile {
     val uid = requireUserId()
     val userRef = users.document(uid)
     val existing =
       transact(OperationType.WRITE, userRef.path) { tx ->
         val snapshot = tx.get(userRef)
         if (!snapshot.exists()) {
-          tx.set(userRef, newProfileFields(uid, displayName, neighborhoodLabel))
+          tx.set(userRef, newProfileFields(uid, displayName))
         }
         snapshot.toModelOrNull<UserProfile>()
       }
@@ -101,14 +97,14 @@ class BlockBenchRepository(
         id = uid,
         uid = uid,
         displayName = cleanDisplayName(displayName),
-        neighborhoodLabel = cleanNeighborhoodLabel(neighborhoodLabel),
+        neighborhoodLabel = DEFAULT_NEIGHBORHOOD_LABEL,
         alertCategories = DEFAULT_ALERT_CATEGORIES,
         createdAt = Timestamp.now(),
         updatedAt = Timestamp.now(),
       )
   }
 
-  suspend fun updateProAlertsSettings(
+  override suspend fun updateProAlertsSettings(
     enabled: Boolean,
     radiusMiles: Double,
     categories: List<String>,
@@ -131,7 +127,7 @@ class BlockBenchRepository(
    * bookings. The counters only ever grow, and a failure here is logged but not thrown: the
    * figures on screen are computed from the bookings themselves, so nothing is lost.
    */
-  suspend fun syncCompletedEarningsToProfile(
+  override suspend fun syncCompletedEarningsToProfile(
     completedHandoffs: Long,
     earnedCents: Long,
     feesCents: Long,
@@ -173,7 +169,7 @@ class BlockBenchRepository(
 
   // ------------------------------------------------- circles and invite codes
 
-  fun observeMyCircles(uid: String): Flow<List<BlockCircle>> =
+  override fun observeMyCircles(uid: String): Flow<List<BlockCircle>> =
     circles
       .whereArrayContains("memberUids", uid)
       .snapshots()
@@ -187,10 +183,7 @@ class BlockBenchRepository(
    * transaction. A freshly generated invite code that happens to be taken is simply replaced by
    * another one; nothing is written until a free code is found.
    */
-  suspend fun createBlockCircle(
-    circleName: String,
-    radiusMiles: Double = DEFAULT_RADIUS_MILES,
-  ): BlockCircle {
+  override suspend fun createBlockCircle(circleName: String, radiusMiles: Double): BlockCircle {
     val uid = requireUserId()
     val cleanName = circleName.trim().take(MAX_NAME_LENGTH)
     if (cleanName.length < 2) throw UserFacingException("Block name must be at least 2 characters.")
@@ -251,7 +244,7 @@ class BlockBenchRepository(
    * Joins the block behind [rawCode] and makes it the active one. Entering the code of a block
    * the user already belongs to just switches to it.
    */
-  suspend fun joinCircleByInviteCode(rawCode: String): BlockCircle {
+  override suspend fun joinCircleByInviteCode(rawCode: String): BlockCircle {
     val uid = requireUserId()
     val code = InviteCodes.normalize(rawCode)
     if (!InviteCodes.isWellFormed(code)) {
@@ -316,7 +309,7 @@ class BlockBenchRepository(
       ?: target.copy(memberUids = listOf(invite.creatorUid, uid).distinct())
   }
 
-  suspend fun switchActiveCircle(circle: BlockCircle) {
+  override suspend fun switchActiveCircle(circle: BlockCircle) {
     val uid = requireUserId()
     val userRef = users.document(uid)
     transact(OperationType.UPDATE, userRef.path) { tx ->
@@ -330,7 +323,7 @@ class BlockBenchRepository(
    * escrow in flight in that block, because the neighbour on the other side would be left with a
    * booking nobody can see through. Returns the number of listings that were removed.
    */
-  suspend fun leaveBlockCircle(circle: BlockCircle, nextActiveCircle: BlockCircle?): Int {
+  override suspend fun leaveBlockCircle(circle: BlockCircle, nextActiveCircle: BlockCircle?): Int {
     val uid = requireUserId()
     if (circle.creatorUid == uid) {
       throw UserFacingException("You started ${circle.name}, so you can't leave it.")
@@ -377,8 +370,8 @@ class BlockBenchRepository(
 
   // ------------------------------------------------------------------ listings
 
-  /** The feed of one block, newest first. Only members of the block may read it. */
-  fun observeCircleListings(circleId: String): Flow<List<Listing>> {
+  /** Only members of the block may read its feed; the query filter is what the rules check. */
+  override fun observeCircleListings(circleId: String): Flow<List<Listing>> {
     val subscriberUid = auth.currentUser?.uid.orEmpty()
     return listings
       .whereEqualTo("circleId", circleId)
@@ -389,7 +382,7 @@ class BlockBenchRepository(
       .logFailures(OperationType.LIST, "listings?circleId=$circleId", subscriberUid)
   }
 
-  suspend fun createListing(
+  override suspend fun createListing(
     circle: BlockCircle,
     ownerName: String,
     ownerTrustScore: Double,
@@ -401,7 +394,7 @@ class BlockBenchRepository(
     depositCents: Long,
     distanceMiles: Double,
     instantPickup: Boolean,
-    photoUri: String = "",
+    photoUri: String,
   ): String {
     val uid = requireUserId()
     val details =
@@ -440,7 +433,7 @@ class BlockBenchRepository(
     }
   }
 
-  suspend fun updateListingDetails(
+  override suspend fun updateListingDetails(
     listingId: String,
     title: String,
     description: String,
@@ -476,7 +469,7 @@ class BlockBenchRepository(
    * reserved until that booking is settled. Resuming also clears a reservation left behind by an
    * older app version (see [Listing.hasUntrackedReservation]).
    */
-  suspend fun setListingPaused(listingId: String, paused: Boolean) {
+  override suspend fun setListingPaused(listingId: String, paused: Boolean) {
     requireUserId()
     val listingRef = listings.document(listingId)
     transact(OperationType.UPDATE, listingRef.path) { tx ->
@@ -493,7 +486,7 @@ class BlockBenchRepository(
     }
   }
 
-  suspend fun deleteListing(listingId: String) {
+  override suspend fun deleteListing(listingId: String) {
     requireUserId()
     val listingRef = listings.document(listingId)
     transact(OperationType.DELETE, listingRef.path) { tx ->
@@ -506,7 +499,7 @@ class BlockBenchRepository(
 
   // --------------------------------------------------------- escrow bookings
 
-  fun observeMyBookings(uid: String): Flow<List<Booking>> =
+  override fun observeMyBookings(uid: String): Flow<List<Booking>> =
     bookings
       .whereArrayContains("participantUids", uid)
       .snapshots()
@@ -522,7 +515,7 @@ class BlockBenchRepository(
    * transaction, against the listing as it is on the server right now. [listing] is what the user
    * was looking at; if the price they agreed to has changed since, nothing is booked.
    */
-  suspend fun createBookingRequest(
+  override suspend fun createBookingRequest(
     listing: Listing,
     currentUserName: String,
     notes: String,
@@ -601,10 +594,10 @@ class BlockBenchRepository(
    * Moves [booking] along the escrow workflow (see [EscrowWorkflow]) as the signed-in user.
    * Completing or cancelling frees the listing in the same transaction.
    */
-  suspend fun advanceBookingStatus(
+  override suspend fun advanceBookingStatus(
     booking: Booking,
     nextStatus: String,
-    updatedNotes: String = booking.notes,
+    updatedNotes: String,
   ) {
     val uid = requireUserId()
     val bookingRef = bookings.document(booking.id)
@@ -723,9 +716,6 @@ class BlockBenchRepository(
   private fun cleanDisplayName(name: String): String =
     name.trim().take(MAX_NAME_LENGTH).ifEmpty { DEFAULT_DISPLAY_NAME }
 
-  private fun cleanNeighborhoodLabel(label: String): String =
-    label.trim().take(80).ifEmpty { DEFAULT_NEIGHBORHOOD_LABEL }
-
   private fun signedInDisplayName(): String {
     val user = auth.currentUser
     return user?.displayName?.takeIf { it.isNotBlank() }
@@ -733,15 +723,11 @@ class BlockBenchRepository(
       ?: DEFAULT_DISPLAY_NAME
   }
 
-  private fun newProfileFields(
-    uid: String,
-    displayName: String,
-    neighborhoodLabel: String = DEFAULT_NEIGHBORHOOD_LABEL,
-  ): Map<String, Any> =
+  private fun newProfileFields(uid: String, displayName: String): Map<String, Any> =
     mapOf(
       "uid" to uid,
       "displayName" to cleanDisplayName(displayName),
-      "neighborhoodLabel" to cleanNeighborhoodLabel(neighborhoodLabel),
+      "neighborhoodLabel" to DEFAULT_NEIGHBORHOOD_LABEL,
       "activeCircleId" to "",
       "activeCircleName" to "",
       "activeInviteCode" to "",

@@ -3,7 +3,7 @@ package com.example.ui
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.repository.BlockBenchRepository
+import com.example.data.repository.BlockBenchDataSource
 import com.example.data.toUserMessage
 import com.example.model.BlockCircle
 import com.example.model.Booking
@@ -57,7 +57,7 @@ sealed interface SessionState {
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class BlockBenchViewModel(
-  private val repository: BlockBenchRepository,
+  private val repository: BlockBenchDataSource,
   private val currentUserId: String,
   private val initialDisplayName: String,
 ) : ViewModel() {
